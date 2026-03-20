@@ -1,0 +1,25 @@
+# Ambiente virtual e cache
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Segredos
+.env
+
+# Dados de runtime
+data/*.json
+logs/
+discord_audios/
+code_artifacts/
+
+# Arquivos temporários
+*.backup
+nul
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
+.claude/

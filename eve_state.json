@@ -1,0 +1,15 @@
+{
+  "current_mood": {
+    "mood": "neutral",
+    "intensity": 0.5,
+    "since": "2026-01-07T16:53:46.523621",
+    "reason": "startup"
+  },
+  "session_start": "2026-03-19T22:32:42.555560",
+  "total_exchanges": 1,
+  "satisfaction_signals": 0,
+  "frustration_signals": 0,
+  "code_interactions": 0,
+  "question_count": 0,
+  "successful_helps": 0
+}

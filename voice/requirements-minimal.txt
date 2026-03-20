@@ -1,0 +1,47 @@
+# ═══════════════════════════════════════════════════════════════════
+# INSTALAÇÃO MÍNIMA DO MÓDULO DE VOZ
+# ═══════════════════════════════════════════════════════════════════
+#
+# Esta é a instalação mínima para testar o módulo rapidamente.
+# Para funcionalidades completas, use requirements.txt
+#
+# Instalar:
+#   pip install -r voice/requirements-minimal.txt
+#
+# ═══════════════════════════════════════════════════════════════════
+
+# Core
+numpy>=1.21.0
+
+# Áudio básico
+pyaudio>=0.2.11
+
+# STT - Whisper (versão mais leve)
+faster-whisper>=0.9.0
+
+# TTS - pyttsx3 (mais fácil de instalar)
+pyttsx3>=2.90
+
+# VAD - Energy-based (não requer dependências extras)
+# (já incluído no código, não precisa instalar nada)
+
+# Utils
+python-dotenv>=1.0.0
+
+# ═══════════════════════════════════════════════════════════════════
+# ATENÇÃO:
+# ═══════════════════════════════════════════════════════════════════
+#
+# Esta instalação mínima NÃO inclui:
+# - Silero VAD (requer PyTorch - 2GB+)
+# - Redução de ruído (noisereduce)
+# - Integração com Discord
+# - Piper TTS (melhor qualidade)
+# - Coqui TTS
+#
+# Você ainda precisará instalar FFmpeg manualmente:
+# - Windows: winget install FFmpeg
+# - Linux: sudo apt install ffmpeg
+# - macOS: brew install ffmpeg
+#
+# ═══════════════════════════════════════════════════════════════════
