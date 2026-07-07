@@ -12,6 +12,15 @@ import json
 import os
 import time
 
+# === Diretórios do projeto ===
+PROJECT_ROOT = Path(__file__).parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
+LOGS_DIR = PROJECT_ROOT / "logs"
+
+# Garante que existem
+DATA_DIR.mkdir(exist_ok=True)
+LOGS_DIR.mkdir(exist_ok=True)
+
 
 class ExecutionPolicy(Enum):
     """Política de execução do sistema"""
@@ -176,9 +185,9 @@ class EveConfig:
     model_limits: ModelLimits = field(default_factory=ModelLimits)
 
     # Caminhos
-    memory_file: str = "eve_memory_v2.json"
-    chats_file: str = "eve_chats.json"
-    features_file: str = "eve_features.json"
+    memory_file: str = str(DATA_DIR / "eve_memory_v2.json")
+    chats_file: str = str(DATA_DIR / "eve_chats.json")
+    features_file: str = str(DATA_DIR / "eve_features.json")
     personality_file: str = "core/personality.txt"
 
     # Comportamento geral

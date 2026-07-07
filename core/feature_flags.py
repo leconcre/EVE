@@ -58,7 +58,7 @@ class FeatureFlags:
         if path is None:
             # Procurar no diretório do projeto
             project_root = Path(__file__).parent.parent
-            path = project_root / 'eve_features.json'
+            path = project_root / 'data' / 'eve_features.json'
 
         path = Path(path)
 
@@ -79,7 +79,7 @@ class FeatureFlags:
         """Salva flags em arquivo JSON"""
         if path is None:
             project_root = Path(__file__).parent.parent
-            path = project_root / 'eve_features.json'
+            path = project_root / 'data' / 'eve_features.json'
 
         path = Path(path)
 

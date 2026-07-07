@@ -81,15 +81,16 @@ try:
     # Caminho da área de trabalho
     desktop = winshell.desktop()
     
-    # ✅ ATUALIZADO: Aponta para eve_gui_DEFINITIVA.py
-    script_path = os.path.join(os.getcwd(), "eve_gui_ultra_final.py")
-    
+    # ✅ ATUALIZADO: Aponta para eve_gui.py
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script_path = os.path.join(project_root, "eve_gui.py")
+
     # Verifica se o arquivo existe
     if not os.path.exists(script_path):
-        print(f"\n❌ ERRO: eve_gui_ultra_final.py não encontrado!")
+        print(f"\n❌ ERRO: eve_gui.py não encontrado!")
         print(f"   Procurado em: {script_path}")
         print("\n💡 SOLUÇÃO:")
-        print("   1. Certifique-se de que eve_gui_ultra_final.py está na pasta")
+        print("   1. Certifique-se de que eve_gui.py está na pasta raiz do projeto")
         print("   2. Ou execute este script dentro da pasta 'EVE - AI'")
         input("\nPressione Enter para sair...")
         sys.exit(1)

@@ -20,7 +20,7 @@ class MemoryManager:
     - Sistema de relevância por categorias
     """
 
-    def __init__(self, persistence_file: str = "eve_memory.json"):
+    def __init__(self, persistence_file: str = "data/eve_memory.json"):
         self.persistence_file = persistence_file
         self.memory: List[Dict[str, Any]] = []
         self.important_facts: Dict[str, Any] = {}  # Fatos importantes extraídos

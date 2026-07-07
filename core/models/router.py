@@ -1,4 +1,5 @@
 # core/models/router.py
+# NEW: Ainda não conectado ao core.eve — pendente migração do legacy core.router
 """
 Router de modelos por capability.
 Seleciona o melhor modelo disponível baseado em capabilities e policy.
