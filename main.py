@@ -45,9 +45,6 @@ def detect_buggy_response(response: str) -> bool:
 def main():
     eve = Eve(personality_file=PERSONALITY_FILE)
 
-    # Flag para controlar se EVE está processando
-    is_processing = False
-
     # Registra a função de desligamento para ser chamada na saída
     def shutdown_eve():
         print_flush("\nSalvando sessão e desligando EVE...")
@@ -74,11 +71,6 @@ def main():
         try:
             sys.stdout.flush()
             sys.stderr.flush()
-
-            # Verifica se EVE está processando
-            if is_processing:
-                print_flush("⏳ Aguarde, EVE ainda está processando a mensagem anterior...")
-                continue
 
             user_input = input("Você: ").strip()
             sys.stdout.flush()
@@ -113,9 +105,6 @@ def main():
             if not user_input and attachments:
                 user_input = "Analise esta imagem brevemente"
 
-            # TRAVA: Marca que EVE está processando
-            is_processing = True
-
             # Indica processamento com indicador de modo
             if attachments:
                 print_flush("🖼️  Analisando imagem...")
@@ -129,37 +118,52 @@ def main():
             sys.stdout.flush()
 
             # Define max_tokens baseado no tipo de pergunta
-            max_tokens = 400  # Padrão
-            
-            # Perguntas simples = menos tokens
+            max_tokens = 1024  # Padrão generoso
+
+            # Saudações simples = menos tokens
             simple_words = ["oi", "olá", "hi", "tudo bem", "como vai", "ok", "entendi"]
-            if any(word in user_input.lower() for word in simple_words):
-                max_tokens = 200
-            
-            # Perguntas técnicas complexas = mais tokens
-            complex_words = ["como funciona", "explique", "detalhe", "diferença entre"]
+            if user_input.lower().strip() in simple_words:
+                max_tokens = 300
+
+            # Perguntas complexas, código, tutoriais = mais tokens
+            complex_words = ["como funciona", "explique", "detalhe", "diferença entre",
+                           "código", "codigo", "tutorial", "passo a passo", "me ensine"]
             if any(word in user_input.lower() for word in complex_words):
-                max_tokens = 500
+                max_tokens = 2048
+
+            # Streaming: imprime o texto conforme o modelo local gera
+            # (Groq responde rápido e chega de uma vez, sem chunks)
+            stream_state = {"started": False}
+
+            def stream_chunk(chunk):
+                if not stream_state["started"]:
+                    stream_state["started"] = True
+                    clear_line()
+                    sys.stdout.write("EVE 💻: ")
+                sys.stdout.write(chunk)
+                sys.stdout.flush()
 
             # Gera resposta
             response = eve.generate_response(
-                user_input, 
+                user_input,
                 files=attachments,
                 max_tokens=max_tokens,
-                temperature=0.7
+                temperature=0.7,
+                stream_callback=None if attachments else stream_chunk
             )
-            
+
             # Extrai texto e artefatos da resposta
             response_text = response.get("text", "")
             response_artifacts = response.get("artifacts")
             model_used = response.get("model_used", "unknown")
             web_search_used = response.get("web_search_used", False)
 
-            # Limpa a linha de "pensando..."
-            clear_line()
-
-            # DESTRAVA: EVE terminou de processar
-            is_processing = False
+            if stream_state["started"]:
+                # Já imprimiu via streaming — só fecha a linha
+                print_flush("\n")
+            else:
+                # Limpa a linha de "pensando..."
+                clear_line()
 
             # VALIDA resposta antes de mostrar
             if detect_buggy_response(response_text):
@@ -186,24 +190,24 @@ def main():
                 else:
                     model_indicator = "💻"    # Local
 
-            sys.stdout.flush()
-            print_flush(f"EVE {model_indicator}: {response_text}\n")
-            sys.stdout.flush()
-            
+            # Se já streamou, não repete a resposta na tela
+            if not stream_state["started"]:
+                sys.stdout.flush()
+                print_flush(f"EVE {model_indicator}: {response_text}\n")
+                sys.stdout.flush()
+
             logging.info(f"User: {user_input}")
             if attachments:
                 logging.info(f"Attachments: {len(attachments)}")
             logging.info(f"EVE: {response_text[:150]}...")
 
         except KeyboardInterrupt:
-            is_processing = False
             print_flush("\n\nEVE: Até logo! 💜\n")
             # atexit cuidará do salvamento
             logging.info("Sessão interrompida (Ctrl+C)")
             break
 
         except Exception as e:
-            is_processing = False  # DESTRAVA em caso de erro
             print_flush(f"\n⚠️  Erro: {str(e)}\n")
             logging.error(f"Erro: {e}", exc_info=True)
 

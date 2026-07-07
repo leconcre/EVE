@@ -42,6 +42,7 @@ except Exception:
 # FEATURE FLAGS - Controla migração incremental
 # ═══════════════════════════════════════════════════════════════════
 from core.feature_flags import FLAGS, reload_flags
+from core.cache_policy import is_cacheable_prompt
 
 # ═══════════════════════════════════════════════════════════════════
 # IMPORTAÇÕES OPCIONAIS (graceful degradation)
@@ -230,8 +231,7 @@ class Eve:
     def __init__(
         self,
         personality_file: str = "core/personality.txt",
-        memory_file: str = "eve_memory.json",
-        use_embeddings: bool = False,
+        memory_file: str = "data/eve_memory.json",
         enable_web_search: bool = True,
     ):
         """
@@ -240,7 +240,6 @@ class Eve:
         Args:
             personality_file: Caminho do arquivo de personalidade
             memory_file: Caminho do arquivo de memória
-            use_embeddings: Se deve usar embeddings (requer sklearn)
             enable_web_search: Se deve habilitar busca web
         """
         logger.info("Inicializando EVE 2.0...")
@@ -279,7 +278,7 @@ class Eve:
         if FLAGS.ENABLE_LAYERED_MEMORY and LAYERED_MEMORY_AVAILABLE:
             # === MEMÓRIA V2 (Layered) ===
             self.layered_memory = LayeredMemory(
-                persistence_path="eve_memory_v2.json"
+                persistence_path="data/eve_memory_v2.json"
             )
             logger.info(f"✅ Layered Memory carregada")
         elif MEMORY_AVAILABLE:
@@ -298,7 +297,7 @@ class Eve:
 
         # Histórico de conversa (sessão atual)
         self.conversation_history = []
-        self.chats_file = "eve_chats.json"
+        self.chats_file = "data/eve_chats.json"
         self.max_history = 10
 
         # Spell checker
@@ -326,7 +325,7 @@ class Eve:
         self.internal_state = None
         if FLAGS.ENABLE_INTERNAL_STATE and STATE_AVAILABLE:
             self.internal_state = InternalState(
-                persistence_path="eve_state.json"
+                persistence_path="data/eve_state.json"
             )
             logger.info("✅ Estado Interno inicializado")
 
@@ -389,6 +388,24 @@ class Eve:
             self.task_engine = get_task_engine()
             logger.info("✅ Task Engine inicializado")
 
+        # Capability Router (experimental — ENABLE_CAPABILITY_ROUTING)
+        # Conecta o core.models.router.ModelRouter ao fluxo V2
+        self.model_executor = None
+        if FLAGS.ENABLE_CAPABILITY_ROUTING:
+            try:
+                from core.models.router import ModelRouter, ModelExecutor
+                from engines.ollama_engine import OllamaEngine
+
+                capability_router = ModelRouter()
+                self.model_executor = ModelExecutor(
+                    router=capability_router,
+                    ollama_engine=OllamaEngine(),
+                    groq_engine=self.groq_engine
+                )
+                logger.info("✅ Capability Router conectado (experimental)")
+            except Exception as e:
+                logger.warning(f"⚠️ Capability Router não disponível: {e}")
+
         logger.info("🎉 EVE 2.0 inicializado com sucesso!")
     
     # ═══════════════════════════════════════════════════════════════
@@ -426,43 +443,23 @@ Use português brasileiro."""
     
     def _format_response(self, response: str) -> str:
         """
-        Formata resposta para melhor legibilidade no terminal.
-        Adiciona quebras de linha em parágrafos longos.
-        
-        Args:
-            response: Texto da resposta
-            
-        Returns:
-            Resposta formatada
+        Formata resposta para melhor legibilidade.
+        Apenas limpeza leve — respeita a formatação do modelo.
         """
-        if not response or len(response) < 50:
+        if not response or len(response) < 20:
             return response
-        
-        # Se já tem muitas quebras de linha, não mexe
-        if response.count('\n') > 5:
-            return response
-        
-        # Divide em frases
-        sentences = re.split(r'\.(?=\s+[A-ZÀ-Ú])', response)
-        formatted_lines = []
-        
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
-                continue
-            
-            if not sentence.endswith('.'):
-                sentence += '.'
-            
-            formatted_lines.append(sentence)
-        
-        # Agrupa em parágrafos de 3 frases
-        paragraphs = []
-        for i in range(0, len(formatted_lines), 3):
-            para = ' '.join(formatted_lines[i:i+3])
-            paragraphs.append(para)
-        
-        return '\n\n'.join(paragraphs)
+
+        # Remove espaços em branco excessivos no início/fim
+        response = response.strip()
+
+        # Normaliza múltiplas linhas em branco (máximo 2)
+        response = re.sub(r'\n{3,}', '\n\n', response)
+
+        # Remove espaços trailing em cada linha
+        lines = [line.rstrip() for line in response.split('\n')]
+        response = '\n'.join(lines)
+
+        return response
     
     # ═══════════════════════════════════════════════════════════════
     # BUSCA WEB
@@ -471,48 +468,56 @@ Use português brasileiro."""
     def _should_search_web(self, prompt: str) -> bool:
         """
         Detecta se deve fazer busca web baseado no prompt.
-
-        CORREÇÃO: Menos restritivo para encontrar mais informações
-
-        Args:
-            prompt: Pergunta do usuário
-
-        Returns:
-            True se deve buscar na web
+        Busca apenas quando realmente necessário para evitar respostas poluídas.
         """
         if not self.web_search_enabled:
             return False
 
         prompt_lower = prompt.lower().strip()
 
-        # Ignora apenas saudações muito simples
-        casual = ["oi", "olá", "ola", "hi", "hello"]
+        # Ignora prompts curtos e saudações
+        if len(prompt_lower) < 10:
+            return False
+
+        casual = [
+            "oi", "olá", "ola", "hi", "hello", "tudo bem", "como vai",
+            "obrigado", "valeu", "ok", "blz", "entendi", "sim", "não",
+            "legal", "massa", "show", "beleza", "tchau", "até mais"
+        ]
         if prompt_lower in casual:
             return False
 
-        # CORREÇÃO: Reduzido de 10 para 6 caracteres
-        if len(prompt_lower) < 6:
-            return False
-
-        # Palavras explícitas de busca
-        explicit = ["pesquise", "pesquisar", "busque", "buscar", "procure", "procurar", "pesquisa", "busca"]
+        # Busca EXPLÍCITA - sempre busca (prioridade máxima)
+        explicit = ["pesquise", "pesquisar", "busque", "buscar", "procure", "procurar"]
         if any(t in prompt_lower for t in explicit):
             return True
 
-        # CORREÇÃO: Mais triggers de perguntas e contexto reduzido de 15 para 8
-        questions = [
-            "o que é", "o que foi", "o que são", "quem foi", "quem é", "quando foi",
-            "como funciona", "onde fica", "onde", "quando", "por que", "porque",
-            "explique", "me fale sobre", "fale sobre", "qual", "quais", "como",
-            "me diga", "pode me", "você conhece", "sabe"
+        # Não buscar para perguntas sobre programação/código
+        code_signals = [
+            "código", "codigo", "função", "funcao", "script",
+            "debug", "erro no código", "compilar", "rodar", "executar",
+            "variável", "variavel", "class ", "def ", "import ", "print(",
+            "[modo código]"
         ]
-        if any(q in prompt_lower for q in questions) and len(prompt_lower) > 8:
-            return True
+        if any(s in prompt_lower for s in code_signals):
+            return False
 
-        # NOVO: Detecta nomes próprios ou tópicos específicos (palavras com maiúscula no meio)
-        import re
-        if re.search(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b', prompt):
-            logger.info("🔍 Nome próprio detectado - ativando busca web")
+        # Não buscar para conversas sobre o próprio bot/EVE
+        eve_signals = ["você", "voce", "eve", "seu nome", "sua", "me ajuda", "me ajude"]
+        if any(s in prompt_lower for s in eve_signals) and len(prompt_lower) < 40:
+            return False
+
+        # Perguntas factuais que realmente precisam de dados externos
+        factual_questions = [
+            "o que é", "o que foi", "o que são",
+            "quem foi", "quem é", "quem eram",
+            "quando foi", "quando aconteceu",
+            "onde fica", "onde é",
+            "me fale sobre", "fale sobre",
+            "qual a história", "qual a população",
+            "notícias sobre", "últimas notícias"
+        ]
+        if any(q in prompt_lower for q in factual_questions):
             return True
 
         return False
@@ -584,20 +589,28 @@ Use português brasileiro."""
     def _validate_response(self, response: str) -> str:
         """
         Valida e limpa resposta do modelo.
-        Remove erros comuns, corrige ortografia, etc.
-        
-        Args:
-            response: Resposta bruta do modelo
-            
-        Returns:
-            Resposta validada e limpa
+        Protege blocos de código da limpeza.
         """
         if not response or len(response) < 5:
             return "Desculpa, tive um problema."
-        
-        # Remove corrupção de caracteres
-        response = re.sub(r'[^\x00-\x7F\u00C0-\u017F\u0020-\u007E\n\r\t]+', '', response)
-        
+
+        # Detecta vazamento de sistema (crítico!)
+        if "PERSONALIDADE CORE:" in response or "REGRAS CRÍTICAS:" in response:
+            logger.error("Vazamento de sistema detectado!")
+            return "Ops, tive um bug!"
+
+        # === Protege blocos de código antes de processar ===
+        code_blocks = []
+        def _save_code(match):
+            code_blocks.append(match.group(0))
+            return f"__CODE_BLOCK_{len(code_blocks) - 1}__"
+
+        # Extrai blocos ```...``` para não serem processados
+        response = re.sub(r'```[\s\S]*?```', _save_code, response)
+
+        # Remove apenas caracteres de controle (mantém emojis, acentos, etc)
+        response = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', response)
+
         # Remove placeholders de links inventados
         response = re.sub(
             r'\{link que (?:direciona|redireciona) para (?:uma )?fonte (?:confiável|segura)\}',
@@ -605,47 +618,23 @@ Use português brasileiro."""
             response,
             flags=re.IGNORECASE
         )
-        response = re.sub(
-            r'\[link (?:que )?(?:direciona|redireciona).*?\]',
-            '',
-            response,
-            flags=re.IGNORECASE
-        )
-        
-        # Spell checker - MELHORADO com whitelist expandida
-        # Agora protege nomes de jogos, termos técnicos e nomes próprios
+
+        # Spell checker (apenas no texto, não no código)
         if self.spell_checker:
             response = self.spell_checker.correct_text(response, aggressive=False, use_online=False)
-        
-        # Remove repetições excessivas de "honesta"
-        honesty_patterns = [
-            r'(?:,\s*)?(?:sendo|sou)\s+honesta',
-            r'(?:,\s*)?para\s+ser\s+honesta',
-            r'(?:,\s*)?honestamente',
-        ]
-        
-        honesty_count = sum(len(re.findall(p, response, re.IGNORECASE)) for p in honesty_patterns)
-        
-        if honesty_count > 2:
-            for pattern in honesty_patterns:
-                matches = list(re.finditer(pattern, response, re.IGNORECASE))
-                if len(matches) > 1:
-                    # Remove todas menos a primeira
-                    for match in reversed(matches[1:]):
-                        response = response[:match.start()] + response[match.end():]
-        
-        # Remove repetições de palavras
-        response = re.sub(r'\b(\w+)\s+\1\b', r'\1', response, flags=re.IGNORECASE)
-        
-        # Normaliza espaços
-        response = re.sub(r'\s+', ' ', response)
-        response = re.sub(r'\n\s*\n\s*\n', '\n\n', response)
-        
-        # Detecta vazamento de sistema (crítico!)
-        if "PERSONALIDADE CORE:" in response or "REGRAS CRÍTICAS:" in response:
-            logger.error("⚠️ Vazamento de sistema detectado!")
-            return "Ops, tive um bug! 😅"
-        
+
+        # Remove repetições de palavras consecutivas (fora de código)
+        # Só palavras com 4+ letras para não afetar duplicações legítimas
+        # do português ("dia a dia", "que que" coloquial etc.)
+        response = re.sub(r'\b([A-Za-zÀ-ÿ]{4,})\s+\1\b', r'\1', response, flags=re.IGNORECASE)
+
+        # Normaliza múltiplas linhas em branco
+        response = re.sub(r'\n{3,}', '\n\n', response)
+
+        # === Restaura blocos de código intactos ===
+        for i, block in enumerate(code_blocks):
+            response = response.replace(f"__CODE_BLOCK_{i}__", block)
+
         return response.strip()
     
     # ═══════════════════════════════════════════════════════════════
@@ -657,8 +646,9 @@ Use português brasileiro."""
         prompt: str,
         model_choice: Optional[str] = None,
         files: Optional[List[str]] = None,
-        max_tokens: int = 400,
-        temperature: float = 0.6
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+        stream_callback=None
     ) -> Dict[str, Any]:
         """
         Gera resposta com todas as funcionalidades integradas.
@@ -673,6 +663,10 @@ Use português brasileiro."""
             files: Lista de arquivos anexados (imagens)
             max_tokens: Máximo de tokens na resposta
             temperature: Temperatura (0.0-1.0)
+            stream_callback: Função chamada com cada pedaço de texto durante
+                a geração (só no modelo local/Ollama). O texto final retornado
+                passa por pós-processamento e pode diferir levemente do
+                streamado — a UI deve substituir o preview pelo final.
 
         Returns:
             Dicionário com 'text', 'artifacts', 'model_used', etc.
@@ -698,7 +692,8 @@ Use português brasileiro."""
                 files=files,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                start_time=start_time
+                start_time=start_time,
+                stream_callback=stream_callback
             )
 
         # ═══════════════════════════════════════════════════════════
@@ -719,7 +714,8 @@ Use português brasileiro."""
         files: Optional[List[str]],
         max_tokens: int,
         temperature: float,
-        start_time: float
+        start_time: float,
+        stream_callback=None
     ) -> Dict[str, Any]:
         """
         Fluxo de geração usando Brain V2.
@@ -747,8 +743,11 @@ Use português brasileiro."""
             decision.metadata['force_code'] = True
             logger.info("🚀 Modo CÓDIGO forçado via model_choice")
 
-        # 2. Verificar cache (se não for código ou skill)
-        if not decision.needs_skill() and not decision.metadata.get('force_code'):
+        # 2. Verificar cache (só para prompts independentes de contexto,
+        #    sem código, skill ou imagem anexada)
+        if (not files and not decision.needs_skill()
+                and not decision.metadata.get('force_code')
+                and is_cacheable_prompt(prompt)):
             cached = self._get_cached_response(prompt)
             if cached:
                 return cached
@@ -757,13 +756,20 @@ Use português brasileiro."""
         self._add_to_history("user", prompt)
 
         # 3. Executar skill se selecionada
-        if decision.selected_skill and self.skill_registry:
+        # (com imagem anexada, skill é pulada — skills só processam texto
+        #  e poderiam interceptar a mensagem antes do modelo de visão)
+        skill_output = None
+        if decision.selected_skill and self.skill_registry and not files:
             skill_result = self._execute_skill(decision, prompt)
             if skill_result and skill_result.get('handled'):
                 return skill_result
+            if skill_result:
+                skill_output = skill_result.get('output')
 
-        # 4. Coletar contexto
+        # 4. Coletar contexto (memória, estado e tools como busca web)
         context = self._collect_context(decision, prompt)
+        if skill_output:
+            context['skill_output'] = skill_output
 
         # 5. Gerar resposta com modelo
         response = self._generate_with_model(
@@ -772,7 +778,9 @@ Use português brasileiro."""
             context=context,
             model_choice=model_choice,
             max_tokens=max_tokens,
-            temperature=temperature
+            temperature=temperature,
+            files=files,
+            stream_callback=stream_callback
         )
 
         # 6. Pós-processamento
@@ -794,7 +802,7 @@ Use português brasileiro."""
             "text": response_text,
             "artifacts": response.get('artifacts'),
             "model_used": response.get('model_used', 'unknown'),
-            "web_search_used": response.get('web_search_used', False),
+            "web_search_used": bool(context.get('web_search')) or response.get('web_search_used', False),
             "brain_decision": decision.to_dict() if FLAGS.DEBUG_BRAIN_DECISIONS else None,
             "response_time_ms": response_time_ms
         }
@@ -829,7 +837,7 @@ Use português brasileiro."""
         )
 
         if result and result.success:
-            # Skill pode ter resolvido completamente
+            # Skill pura resolve sem modelo
             if not skill.requires_model:
                 return {
                     'handled': True,
@@ -838,6 +846,9 @@ Use português brasileiro."""
                     'model_used': f'skill:{decision.selected_skill}',
                     'web_search_used': False
                 }
+            # Skill que precisa de modelo: devolve a saída para entrar
+            # no contexto do prompt em vez de ser descartada
+            return {'handled': False, 'output': result.output}
 
         return None
 
@@ -882,7 +893,45 @@ Use português brasileiro."""
         if self.internal_state:
             context['state_instruction'] = get_state_context_for_prompt(self.internal_state)
 
+        # Ferramentas decididas pelo Brain (busca web etc.)
+        context['web_search'] = self._run_web_search_tool(decision, prompt)
+
         return context
+
+    def _run_web_search_tool(self, decision, prompt: str) -> Optional[str]:
+        """
+        Executa a busca web decidida pelo Brain (fluxo V2).
+        Retorna o texto formatado da busca ou None.
+        """
+        if not self.web_search_enabled or not self.web_search:
+            return None
+        if decision.metadata.get('force_code'):
+            return None
+
+        from core.context import ToolType
+        ctx_req = decision.context_requirement
+        if not ctx_req.has_tool(ToolType.WEB_SEARCH):
+            return None
+
+        params = ctx_req.get_tool_params(ToolType.WEB_SEARCH) or {}
+        query = params.get('query') or self._extract_search_query(prompt)
+        if not query or len(query) <= 3:
+            return None
+
+        logger.info(f"🔍 [Brain V2] Buscando na web: {query}")
+        try:
+            result = self.web_search.search_formatted(query)
+        except Exception as e:
+            logger.warning(f"⚠️ Busca web falhou: {e}")
+            return None
+
+        if (result and len(result) > 100
+                and not result.startswith(("[OFFLINE]", "[ERRO]", "[SEM RESULTADOS]"))):
+            logger.info(f"✅ Resultado da web válido ({len(result)} caracteres)")
+            return result
+
+        logger.info("⚠️ Busca web sem resultado útil")
+        return None
 
     def _generate_with_model(
         self,
@@ -891,9 +940,15 @@ Use português brasileiro."""
         context: Dict[str, Any],
         model_choice: Optional[str],
         max_tokens: int,
-        temperature: float
+        temperature: float,
+        files: Optional[List[str]] = None,
+        stream_callback=None
     ) -> Dict[str, Any]:
         """Gera resposta usando modelo apropriado"""
+
+        # Imagens anexadas: rotear direto para o modelo de visão
+        if files:
+            return self._generate_image_response(prompt, files, max_tokens, temperature)
 
         # Construir prompt completo
         full_prompt = self._build_full_prompt(prompt, context, decision)
@@ -907,10 +962,99 @@ Use português brasileiro."""
         if decision.selected_capability == 'code_strong' and self.groq_engine:
             return self._generate_code_response(prompt, decision)
 
-        # Usar modelo local para outras tarefas
+        # Router por capability (experimental, atrás de flag)
+        if self.model_executor and decision.selected_capability:
+            result = self._generate_via_capability_router(
+                decision, full_prompt, max_tokens, temperature
+            )
+            if result is not None:
+                return result
+            # Falhou — segue para o fluxo padrão abaixo
+
+        # Chat: tenta Groq primeiro (rápido, nuvem) com fallback local.
+        # Resultados de busca web são sempre processados pelo modelo local
+        # (mesma regra do fluxo legado).
+        if (self.groq_engine and not context.get('web_search')
+                and not model_choice):
+            groq_response = self._generate_groq_chat(
+                full_prompt, max_tokens, temperature
+            )
+            if groq_response is not None:
+                return groq_response
+            logger.warning("⚠️ Groq indisponível - usando modelo local")
+
+        # Modelo local (Ollama)
         return self._generate_local_response(
-            full_prompt, model_choice, max_tokens, temperature
+            full_prompt, model_choice, max_tokens, temperature,
+            stream_callback=stream_callback
         )
+
+    def _generate_groq_chat(
+        self,
+        full_prompt: str,
+        max_tokens: int,
+        temperature: float
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Tenta gerar resposta de chat via Groq (nuvem).
+        Retorna None se falhar, para o chamador cair no modelo local.
+        """
+        logger.info("☁️ Tentando gerar com Groq (nuvem)...")
+        try:
+            response_text = self.groq_engine.generate(
+                prompt=full_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                system_prompt=self.personality
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Erro ao usar Groq: {e}")
+            return None
+
+        if not response_text or response_text.startswith("[ERRO]"):
+            return None
+
+        logger.info("✅ Resposta gerada com Groq (nuvem)")
+        return {
+            'text': response_text,
+            'artifacts': True if "```" in response_text else None,
+            'model_used': 'groq',
+            'web_search_used': False
+        }
+
+    def _generate_via_capability_router(
+        self,
+        decision,  # BrainDecision
+        full_prompt: str,
+        max_tokens: int,
+        temperature: float
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Gera resposta usando o ModelRouter por capabilities
+        (ENABLE_CAPABILITY_ROUTING). Retorna None em caso de falha,
+        para o chamador usar o fluxo padrão.
+        """
+        try:
+            response_text, model = self.model_executor.execute(
+                capability=decision.selected_capability,
+                prompt=full_prompt,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Capability router falhou ({e}) - usando fluxo padrão")
+            return None
+
+        if not response_text or response_text.startswith("[ERRO]"):
+            return None
+
+        logger.info(f"✅ [Capability Router] Resposta via {model.provider}:{model.model_id}")
+        return {
+            'text': response_text,
+            'artifacts': True if "```" in response_text else None,
+            'model_used': f'{model.provider}_{model.model_id}',
+            'web_search_used': False
+        }
 
     def _build_full_prompt(
         self,
@@ -938,6 +1082,23 @@ Use português brasileiro."""
                 if prefs:
                     parts.append(f"\n[Preferências do usuário]: {prefs}\n")
 
+        # Adicionar resultado de skill (quando a skill não resolve sozinha)
+        if context.get('skill_output'):
+            parts.append(f"\n[Resultado de ferramenta interna]:\n{context['skill_output']}\n")
+
+        # Adicionar informações da web (com regras contra alucinação)
+        if context.get('web_search'):
+            parts.append(f"""
+REGRAS ESTRITAS:
+1. Use APENAS as informações fornecidas abaixo
+2. NÃO invente, deduza ou adicione detalhes que não estão explicitamente escritos
+3. Se não tem certeza ou a informação não está disponível, diga: "Não tenho informação específica sobre isso"
+
+===== INFORMAÇÃO DA WEB =====
+{context['web_search']}
+=============================
+""")
+
         # Adicionar histórico
         parts.append(context.get('conversation', ''))
 
@@ -962,7 +1123,8 @@ Use português brasileiro."""
 
         response_text = self.groq_engine.generate_code(
             task=task,
-            language=language
+            language=language,
+            conversation_history=self.conversation_history
         )
 
         if response_text.startswith("[ERRO]"):
@@ -978,12 +1140,52 @@ Use português brasileiro."""
             'web_search_used': False
         }
 
+    def _generate_image_response(
+        self,
+        prompt: str,
+        files: List[str],
+        max_tokens: int,
+        temperature: float
+    ) -> Dict[str, Any]:
+        """Gera resposta para imagem anexada usando o modelo de visão (fluxo V2)"""
+        if not self.router:
+            return {
+                'text': "[ERRO] Router não disponível",
+                'artifacts': None,
+                'model_used': 'error',
+                'web_search_used': False
+            }
+
+        prompt_dict = {
+            "type": "image",
+            "path": files[0],
+            "text": prompt if isinstance(prompt, str) else "Descreva esta imagem"
+        }
+
+        backend, model_id = self.router.resolve_model(prompt_dict, None)
+        logger.info(f"🖼️ [Brain V2] Analisando imagem com {model_id}")
+
+        response = self.router.generate(
+            prompt_dict,
+            explicit_model=model_id,
+            max_tokens=max_tokens,
+            temperature=temperature
+        )
+
+        return {
+            'text': response.get('text', ''),
+            'artifacts': response.get('artifacts'),
+            'model_used': f'ollama_{model_id}',
+            'web_search_used': False
+        }
+
     def _generate_local_response(
         self,
         prompt: str,
         model_choice: Optional[str],
         max_tokens: int,
-        temperature: float
+        temperature: float,
+        stream_callback=None
     ) -> Dict[str, Any]:
         """Gera resposta usando modelo local (Ollama)"""
         if not self.router:
@@ -993,14 +1195,17 @@ Use português brasileiro."""
                 'web_search_used': False
             }
 
-        backend, model_id = self.router.resolve_model(prompt, model_choice)
+        # "groq" não é um modelo do router local — usa roteamento automático
+        explicit = None if model_choice == "groq" else model_choice
+        backend, model_id = self.router.resolve_model(prompt, explicit)
         logger.info(f"💻 Gerando com Ollama: {model_id}")
 
         response = self.router.generate(
             prompt,
             explicit_model=model_id,
             max_tokens=max_tokens,
-            temperature=temperature
+            temperature=temperature,
+            stream_callback=stream_callback
         )
 
         return {
@@ -1047,14 +1252,16 @@ Use português brasileiro."""
 
     def _save_to_memory(self, prompt: str, response: str):
         """Salva interação na memória"""
+        cacheable = is_cacheable_prompt(prompt)
         if self.layered_memory:
             self.layered_memory.add_exchange(
                 user_input=prompt,
-                assistant_response=response
+                assistant_response=response,
+                cacheable=cacheable
             )
         elif self.memory:
             self.memory.add_memory(prompt, metadata={"response": response})
-            if len(prompt) < 200:
+            if cacheable and len(prompt) < 200:
                 self.memory.cache_response(prompt, response)
 
     def _get_cached_response(self, prompt: str) -> Optional[Dict[str, Any]]:
@@ -1097,7 +1304,8 @@ Use português brasileiro."""
             logger.info(f"Gerando resposta para: {prompt[:50]}...")
 
             # Verifica cache para perguntas frequentes
-            if self.memory and not files:
+            # (só para prompts independentes de contexto)
+            if self.memory and not files and is_cacheable_prompt(prompt):
                 cached_response = self.memory.get_cached_response(prompt)
                 if cached_response:
                     logger.info("✨ Resposta do cache (instantânea)")
@@ -1351,7 +1559,8 @@ IMPORTANTE: NÃO gere código completamente novo. CORRIJA apenas os erros espec�
 
                 response_text = self.groq_engine.generate_code(
                     task=task,
-                    language=detected_language
+                    language=detected_language,
+                    conversation_history=self.conversation_history
                 )
                 model_used = "groq"
 
@@ -1376,7 +1585,6 @@ IMPORTANTE: NÃO gere código completamente novo. CORRIJA apenas os erros espec�
                     response_text = self.groq_engine.generate(
                         prompt=full_prompt,
                         model="llama-3.3-70b-versatile",
-                        system_prompt=self.personality,
                         temperature=temperature,
                         max_tokens=max_tokens
                     )
@@ -1396,16 +1604,19 @@ IMPORTANTE: NÃO gere código completamente novo. CORRIJA apenas os erros espec�
 
             # FALLBACK: Usa Ollama local se Groq falhou ou não está disponível
             if groq_failed or (intent != 'code' and not response_text):
-                backend, model_id = self.router.resolve_model(full_prompt, model_choice)
-                logger.info(f"💻 Gerando com Ollama local: {model_id}")
-                model_used = f"ollama_{model_id}"
+                # "groq" não é um modelo do router local — roteamento automático
+                explicit = None if model_choice == "groq" else model_choice
+
                 if files:
-                    # Modo imagem
+                    # Modo imagem: resolve o modelo a partir do payload de imagem
                     prompt_dict = {
                         "type": "image",
                         "path": files[0],
                         "text": prompt if isinstance(prompt, str) else prompt.get("text", "")
                     }
+                    backend, model_id = self.router.resolve_model(prompt_dict, explicit)
+                    logger.info(f"💻 Gerando com Ollama local: {model_id}")
+                    model_used = f"ollama_{model_id}"
                     response = self.router.generate(
                         prompt_dict,
                         explicit_model=model_id,
@@ -1414,6 +1625,9 @@ IMPORTANTE: NÃO gere código completamente novo. CORRIJA apenas os erros espec�
                     )
                 else:
                     # Modo texto
+                    backend, model_id = self.router.resolve_model(full_prompt, explicit)
+                    logger.info(f"💻 Gerando com Ollama local: {model_id}")
+                    model_used = f"ollama_{model_id}"
                     response = self.router.generate(
                         full_prompt,
                         explicit_model=model_id,
@@ -1440,8 +1654,8 @@ IMPORTANTE: NÃO gere código completamente novo. CORRIJA apenas os erros espec�
         if self.memory and isinstance(prompt, str):
             self.memory.add_memory(prompt, metadata={"response": response_text})
 
-            # Cacheia respostas comuns para uso futuro
-            if model_used != "cache" and len(prompt) < 200:
+            # Cacheia apenas prompts independentes de contexto
+            if model_used != "cache" and len(prompt) < 200 and is_cacheable_prompt(prompt):
                 self.memory.cache_response(prompt, response_text)
 
         response_text = self._format_response(response_text)
@@ -1469,16 +1683,15 @@ IMPORTANTE: NÃO gere código completamente novo. CORRIJA apenas os erros espec�
         if not self.conversation_history:
             return ""
         
-        context_parts = ["=== HISTÓRICO DA CONVERSA ATUAL ==="]
-        
-        # Pega últimas 6 mensagens
-        for entry in self.conversation_history[-6:]:
+        context_parts = ["=== HISTÓRICO DA CONVERSA ==="]
+
+        # Pega últimas 8 mensagens com contexto suficiente
+        for entry in self.conversation_history[-8:]:
             role = "Você" if entry["role"] == "user" else "EVE"
-            # Limita tamanho de cada mensagem no contexto
-            content = entry['content'][:200]
+            content = entry['content'][:800]
             context_parts.append(f"{role}: {content}")
-        
-        context_parts.append("=================================\n")
+
+        context_parts.append("=============================\n")
         return "\n".join(context_parts)
     
     def _add_to_history(self, role: str, content: str, artifacts: Optional[List[str]] = None):

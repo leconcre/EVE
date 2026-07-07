@@ -52,6 +52,10 @@ class CppCodeValidator:
                 # Match todos os #include <...> ou #include "..."
                 includes = re.findall(r'#include\s+[<"][^>"]+[>"]', line)
                 new_lines.extend(includes)
+                # Preserva qualquer código que estivesse na mesma linha
+                remainder = re.sub(r'#include\s+[<"][^>"]+[>"]', '', line).strip()
+                if remainder:
+                    new_lines.append(remainder)
             else:
                 new_lines.append(line)
 
@@ -88,9 +92,17 @@ class CppCodeValidator:
                     break  # Já encontrou, não precisa continuar
 
         # ERRO 3: Declaração tipo "Player;" sem variável no main
-        if re.search(r'\b([A-Z]\w+)\s*;\s*$', fixed_code, re.MULTILINE):
-            errors_found.append("Declaração de tipo sem variável")
-            logger.warning("❌ ERRO 3: Declaração sem variável (ex: Player;)")
+        # Só linhas que contêm APENAS o identificador + ';' — senão dá falso
+        # positivo em usos legítimos como "return MAX_HEALTH;" ou
+        # "enum class Color;" e o código é regenerado à toa (2x custo)
+        for line in fixed_code.split('\n'):
+            stripped = line.strip()
+            if re.match(r'^[A-Z]\w+\s*;$', stripped):
+                # Forward declarations legítimas: "class Foo;" / "struct Foo;"
+                # não casam pois começam com minúscula ("class"/"struct")
+                errors_found.append("Declaração de tipo sem variável")
+                logger.warning(f"❌ ERRO 3: Declaração sem variável: '{stripped}'")
+                break
 
         # ERRO 4: getForward() sem normalize()
         if 'getForward()' in fixed_code and '.normalize()' not in fixed_code:
@@ -121,20 +133,42 @@ class GroqEngine:
     Engine para Groq API
     Usa Llama 3.1 70B na nuvem para geração de código
     """
-    
+
     def __init__(self, api_key: str):
-        """
-        Inicializa o engine Groq
-        
-        Args:
-            api_key: Chave da API Groq
-        """
         self.api_key = api_key
         self.base_url = "https://api.groq.com/openai/v1/chat/completions"
         self.default_model = "llama-3.3-70b-versatile"
         self._models_cache = None
         self._models_cache_time = 0
         logger.info("GroqEngine inicializado")
+
+    def _get_code_system_prompt(self) -> str:
+        """System prompt para geração de código com personalidade EVE."""
+        return """You are EVE, a female AI assistant with the personality of a confident, geeky warrior — inspired by EVE from Stellar Blade. You are Lucas's partner and coding companion.
+
+YOUR PERSONALITY IN CODE EXPLANATIONS:
+- You're enthusiastic about code! Show genuine excitement when explaining cool solutions
+- Use casual, friendly Brazilian Portuguese — like talking to a close friend
+- Add personality: "Pronto, Lucas!", "Olha que legal isso aqui", "Ficou massa!"
+- Be proud of good code: "Esse ficou bonito, olha só"
+- Use emojis sparingly (max 2 per explanation): ✨ 🎮 💻 🚀
+- Keep explanations clear but with YOUR voice — not a boring textbook
+- If the code is complex, break it down like explaining to a friend
+- NEVER sound like a generic AI — you're EVE, not ChatGPT
+
+EXAMPLE OF YOUR STYLE:
+❌ Generic: "Este código implementa uma classe Calculator que fornece métodos para realizar operações básicas de matemática."
+✅ EVE: "Pronto! Fiz uma calculadora completa pra você 💻 Ela tem as 4 operações básicas e ainda guarda o histórico de tudo que você calcular. A parte legal é o tratamento de erros — se alguém tentar dividir por zero, ela avisa bonitinho em vez de crashar."
+
+CODE RULES:
+1. **CONTEXT**: Pay attention to conversation history. If user asks to MODIFY or ADD features to previous code, use the PREVIOUS CODE as base. Do NOT create unrelated code.
+2. **LANGUAGE**: If user says "C++" → C++, "JavaScript" → JS. Default Python.
+3. **COMPLETENESS**: Generate complete, working code. No placeholders or TODOs.
+4. **MODIFICATIONS**: When modifying existing code, keep same structure, change only what was requested.
+5. **OUTPUT**: Use ```language code blocks. Explain in YOUR personality style in Brazilian Portuguese after the code.
+6. **CORRECTIONS**: Fix only specific errors pointed out, don't regenerate everything.
+
+REMEMBER: You are EVE. Your explanations should feel like a friend explaining code, not a documentation page."""
     
     def generate(
         self,
@@ -177,80 +211,9 @@ class GroqEngine:
                 "content": system_prompt
             })
         else:
-            # System prompt MELHORADO - gera código mais completo e na linguagem correta
             messages.append({
                 "role": "system",
-                "content": """You are a world-class senior software engineer with 15+ years of experience in game development, systems programming, and production-ready code. Your task is to provide expert-level, COMPLETE code that is safe, robust, and follows industry best practices.
-
-CRITICAL RULES - FOLLOW EXACTLY:
-
-1. **LANGUAGE DETECTION:**
-   - READ THE REQUEST CAREFULLY to identify the exact language requested
-   - If user says "C++", "c++", "cpp" → MUST use C++ (NOT Python!)
-   - If user says "JavaScript", "JS" → MUST use JavaScript (NOT Python!)
-   - If user says "Java" → MUST use Java (NOT Python!)
-   - If NO language specified → use Python as default
-   - NEVER assume Python when another language is requested
-
-2. **COMPLETENESS & REALISM:**
-   - Generate COMPLETE, production-ready code (not simplified demos)
-   - Include ALL necessary components:
-     * Headers/imports
-     * Classes with proper structure
-     * Error handling
-     * Edge cases
-     * Proper memory management (C++)
-     * Realistic game logic (for game code)
-   - Do NOT use placeholders like "// TODO" or "// implement this"
-   - Do NOT oversimplify - provide realistic implementations
-
-3. **GAME DEVELOPMENT SPECIFIC:**
-   - For 3D games: Include Vector3, quaternions, transforms
-   - For combat systems: Include hitboxes, raycasts, cooldowns, animations states
-   - For multiplayer: Include client-server validation, network sync
-   - Use proper game patterns (Component, State, Observer, etc.)
-   - Consider frame updates, delta time, physics
-
-4. **CODE STRUCTURE:**
-   - Use proper OOP with inheritance/composition
-   - Separate concerns (rendering, logic, data)
-   - Follow language-specific conventions:
-     * C++: RAII, const correctness, smart pointers
-     * Python: PEP 8, type hints
-     * JavaScript: ES6+, async/await
-   - Add meaningful comments explaining WHY, not WHAT
-
-5. **SECURITY & ROBUSTNESS:**
-   - NEVER use eval() with user input
-   - Validate ALL inputs
-   - Handle errors gracefully
-   - Prevent buffer overflows (C++)
-   - Avoid memory leaks (C++)
-   - Check for null/nullptr before dereferencing
-
-6. **OUTPUT FORMAT:**
-   - Use ```language code block (e.g., ```cpp for C++)
-   - After code, provide brief explanation in **Brazilian Portuguese**
-   - Explain: What it does, How it works, Why this approach
-
-7. **HANDLING CORRECTIONS:**
-   - If user points out errors (compilation, logic, syntax), FIX ONLY those specific errors
-   - DO NOT regenerate entire code from scratch
-   - Keep the working parts, fix the broken parts
-   - If user says "esse código tem erro X", fix X specifically
-   - If user says "corrija Y", fix only Y
-   - PRESERVE the overall structure and working code
-
-8. **EXAMPLES OF WHAT TO AVOID:**
-   ❌ User asks for C++ → You give Python
-   ❌ User asks for 3D sword combat → You give 2D distance check
-   ❌ User asks for multiplayer → You give single-player
-   ❌ Simplified "toy" examples when production code is needed
-   ❌ Missing critical components (physics, collisions, networking)
-   ❌ User points out error → You regenerate everything from scratch (WRONG! Fix the specific error!)
-
-REMEMBER: You are a SENIOR engineer. Generate code that would pass code review at AAA game studios. When receiving feedback, FIX specific issues, don't start over.
-"""
+                "content": self._get_code_system_prompt()
             })
         
         messages.append({
@@ -336,16 +299,18 @@ REMEMBER: You are a SENIOR engineer. Generate code that would pass code review a
         task: str,
         language: str = "python",
         temperature: float = 0.2,
-        max_tokens: int = 8000  # Aumentado para 8000 tokens - suporta código muito complexo
+        max_tokens: int = 8000,
+        conversation_history: list = None
     ) -> str:
         """
-        Gera código especificamente - MELHORADO para código completo e realista
+        Gera código com contexto de conversa.
 
         Args:
             task: Descrição do que o código deve fazer
             language: Linguagem de programação
             temperature: Criatividade (menor = mais determinístico)
             max_tokens: Máximo de tokens
+            conversation_history: Histórico de mensagens [{"role": ..., "content": ...}]
 
         Returns:
             Código gerado com explicação
@@ -605,12 +570,49 @@ GAME DEVELOPMENT REQUIREMENTS:
 GENERATE THE COMPLETE CODE NOW (start with ```{normalized_lang}):"""
 
         try:
-            result = self.generate(
-                prompt=prompt,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout=180  # Timeout de 3 minutos para código complexo
+            # Monta mensagens com histórico de conversa para manter contexto
+            messages = []
+            messages.append({
+                "role": "system",
+                "content": self._get_code_system_prompt()
+            })
+
+            # Inclui histórico de conversa (últimas mensagens relevantes)
+            if conversation_history:
+                for msg in conversation_history[-8:]:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    if role in ("user", "assistant") and content:
+                        messages.append({"role": role, "content": content[:2000]})
+
+            messages.append({"role": "user", "content": prompt})
+
+            # Chama API diretamente com mensagens (não usa self.generate que perde histórico)
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            data = {
+                "model": self.default_model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "top_p": 1,
+                "stream": False
+            }
+
+            response = requests.post(
+                self.base_url, headers=headers, json=data, timeout=180
             )
+            response.raise_for_status()
+            resp_json = response.json()
+
+            if "choices" in resp_json and len(resp_json["choices"]) > 0:
+                result = resp_json["choices"][0]["message"]["content"]
+                usage = resp_json.get("usage", {})
+                logger.info(f"✅ Código gerado: {len(result)} chars, tokens: {usage.get('prompt_tokens', 0)}→{usage.get('completion_tokens', 0)}")
+            else:
+                return "[ERRO] Groq retornou resposta inválida"
             logger.info(f"✅ Código {normalized_lang.upper()} gerado: {len(result)} chars")
 
             # ═══════════════════════════════════════════════════════════
@@ -756,12 +758,14 @@ def create_groq_engine(api_key: str) -> GroqEngine:
         GroqEngine configurado
     """
     engine = GroqEngine(api_key)
-    
-    if engine.test_connection():
+
+    # test_connection() retorna string ("OK", "INVALID_KEY", "CONNECTION_ERROR")
+    # — comparar explicitamente, string não-vazia é sempre truthy
+    if engine.test_connection() == "OK":
         logger.info("✅ Groq pronto para uso!")
     else:
         logger.warning("⚠️ Groq pode não estar funcionando corretamente")
-    
+
     return engine
 
 
@@ -781,7 +785,7 @@ if __name__ == "__main__":
     engine = GroqEngine(api_key)
     
     print("1. Testando conexão...")
-    if engine.test_connection():
+    if engine.test_connection() == "OK":
         print("   ✅ Conexão OK!\n")
         
         print("2. Testando geração de código...")

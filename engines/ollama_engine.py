@@ -26,23 +26,26 @@ class OllamaEngine:
         logger.info(f"OllamaEngine inicializado: {self.host}")
 
     def generate(
-        self, 
-        model: str, 
-        prompt: Union[str, dict], 
-        temperature: float = 0.7, 
+        self,
+        model: str,
+        prompt: Union[str, dict],
+        temperature: float = 0.7,
         max_tokens: int = 512,
-        timeout: int = 120
+        timeout: int = 120,
+        system_prompt: Optional[str] = None
     ) -> str:
         """
         Gera resposta do modelo Ollama.
-        
+
         Args:
             model: Nome do modelo (ex: "llama3.1:8b", "qwen3-vl:8b")
             prompt: String ou dict com prompt (dict para imagens)
             temperature: Temperatura (0.0-1.0)
             max_tokens: Máximo de tokens
             timeout: Timeout em segundos
-            
+            system_prompt: Prompt de sistema opcional (enviado via campo
+                "system" da API — usado pelo ModelExecutor do capability router)
+
         Returns:
             Texto gerado pelo modelo
         """
@@ -57,6 +60,9 @@ class OllamaEngine:
                 "temperature": temperature,
             }
         }
+
+        if system_prompt:
+            payload["system"] = system_prompt
 
         # Processa prompt
         if isinstance(prompt, str):

@@ -1,4 +1,5 @@
 # core/router.py - ROTEAMENTO COMPLETO DE MODELOS (REESCRITO)
+# LEGACY: Será substituído por core.models.router.ModelRouter na migração v2
 """
 Router inteligente que escolhe o modelo certo automaticamente:
 - Llama 3.1 8B: conversação geral, personalidade EVE
@@ -121,15 +122,26 @@ def resolve_model(prompt: Union[str, dict], explicit_model: Optional[str] = None
         Tupla (backend, model_id)
     """
     # Se modelo explícito foi fornecido, usa ele
-    if explicit_model:
+    # ("groq" não é servido pelo router local — cai no roteamento automático,
+    #  senão generate() levantaria NotImplementedError e o fallback quebraria)
+    if explicit_model and explicit_model != "groq":
         model_id = explicit_model
         backend = MODEL_MAP.get(model_id, "ollama")
         logger.info(f"Modelo explícito: {model_id} (backend: {backend})")
         return backend, model_id
-    
+
+    if explicit_model == "groq":
+        logger.warning("Modelo 'groq' não é suportado pelo router local - usando roteamento automático")
+
     # Detecta intenção
     intent = detect_intent(prompt)
-    
+
+    # Só roteia para o modelo de visão quando há imagem de verdade;
+    # texto que apenas menciona "imagem/foto" vai para o modelo de chat
+    is_real_image = isinstance(prompt, dict) and prompt.get("type") == "image"
+    if intent == "image" and not is_real_image:
+        intent = "chat"
+
     # Escolhe modelo baseado na intenção
     if intent == "image":
         model_id = VISION_MODELS[0]  # Sempre Qwen3-VL para imagens
@@ -235,16 +247,66 @@ def _extract_response_from_ollama(data: dict, model: str) -> str:
 # FUNÇÃO PRINCIPAL DE GERAÇÃO (OLLAMA)
 # ═══════════════════════════════════════════════════════════════════
 
+def _ollama_stream(
+    url: str,
+    payload: dict,
+    headers: dict,
+    timeout: float,
+    stream_callback
+) -> dict:
+    """
+    Faz a requisição ao Ollama em modo streaming, chamando
+    stream_callback(chunk) a cada pedaço de texto recebido.
+
+    Returns:
+        Dict no mesmo formato da resposta não-streaming
+    """
+    payload = dict(payload)
+    payload["stream"] = True
+
+    full_response = ""
+    with requests.post(url, json=payload, headers=headers,
+                       timeout=timeout, stream=True) as resp:
+        resp.raise_for_status()
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            chunk = data.get("response", "")
+            if chunk:
+                full_response += chunk
+                try:
+                    stream_callback(chunk)
+                except Exception as cb_err:
+                    # Callback da UI não pode derrubar a geração
+                    logger.warning(f"stream_callback falhou: {cb_err}")
+
+            if data.get("done"):
+                break
+
+    return {
+        "model": payload.get("model", ""),
+        "response": full_response,
+        "done": True
+    }
+
+
 def _ollama_generate(
     model: str,
     prompt: Union[str, dict],
     max_tokens: int = 512,
     temperature: float = 0.7,
-    timeout: int = None
+    timeout: int = None,
+    stream_callback=None
 ) -> dict:
     """
     Gera resposta usando Ollama local.
     Suporta texto e imagens (multimodal).
+    Com stream_callback, envia o texto progressivamente enquanto gera.
     
     Args:
         model: Nome do modelo Ollama
@@ -313,6 +375,13 @@ def _ollama_generate(
         
         try:
             logger.info(f"Requisição {attempt}/{MAX_RETRIES} para {model}...")
+
+            # Modo streaming: envia chunks para o callback enquanto gera
+            if stream_callback is not None:
+                data = _ollama_stream(url, payload, headers, timeout, stream_callback)
+                logger.info("✅ Resposta recebida (streaming)")
+                return data
+
             resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
             resp.raise_for_status()
             
@@ -371,6 +440,9 @@ def _ollama_generate(
                 raise
             time.sleep(RETRY_BACKOFF * attempt)
 
+    # Só chega aqui se MAX_RETRIES < 1 (ex.: EVE_MAX_RETRIES=0 no ambiente)
+    raise Exception(f"Nenhuma tentativa executada (EVE_MAX_RETRIES={MAX_RETRIES})")
+
 
 # ═══════════════════════════════════════════════════════════════════
 # FUNÇÃO PRINCIPAL DE GERAÇÃO (INTERFACE PÚBLICA)
@@ -382,7 +454,8 @@ def generate(
     explicit_model: Optional[str] = None,
     max_tokens: int = 512,
     temperature: float = 0.7,
-    return_raw: bool = False
+    return_raw: bool = False,
+    stream_callback=None
 ) -> dict:
     """
     Gera resposta do modelo apropriado.
@@ -417,7 +490,8 @@ def generate(
         model=model_id,
         prompt=prompt,
         max_tokens=max_tokens,
-        temperature=temperature
+        temperature=temperature,
+        stream_callback=stream_callback
     )
     
     # Extrai texto da resposta (suporta thinking do Qwen3-VL)
@@ -459,7 +533,8 @@ class Router:
         explicit_model: Optional[str] = None,
         max_tokens: int = 512,
         temperature: float = 0.7,
-        return_raw: bool = False
+        return_raw: bool = False,
+        stream_callback=None
     ) -> dict:
         """Gera resposta (wrapper para função generate)"""
         return generate(
@@ -467,7 +542,8 @@ class Router:
             explicit_model=explicit_model,
             max_tokens=max_tokens,
             temperature=temperature,
-            return_raw=return_raw
+            return_raw=return_raw,
+            stream_callback=stream_callback
         )
     
     def resolve_model(

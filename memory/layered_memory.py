@@ -121,7 +121,7 @@ class LayeredMemory:
 
     def __init__(
         self,
-        persistence_path: str = 'eve_memory_v2.json',
+        persistence_path: str = 'data/eve_memory_v2.json',
         cleaner_config: CleanerConfig = None
     ):
         self.persistence_path = Path(persistence_path)
@@ -170,11 +170,18 @@ class LayeredMemory:
         self,
         user_input: str,
         assistant_response: str,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        cacheable: bool = False
     ):
         """
         Adiciona uma troca de mensagens.
         Ponto de entrada principal.
+
+        Args:
+            cacheable: se True, a resposta pode ser cacheada e reutilizada
+                fora do contexto desta conversa (ver core.cache_policy).
+                O padrão False evita que respostas contextuais como
+                "sim" ou "continue" sejam replayadas em outra conversa.
         """
         with self._lock:
             now = datetime.now()
@@ -199,8 +206,8 @@ class LayeredMemory:
             # 4. Atualizar preferências observadas
             self._update_preferences_from_text(user_input)
 
-            # 5. Cache de resposta (se curta)
-            if len(assistant_response) < 200:
+            # 5. Cache de resposta (se curta e independente de contexto)
+            if cacheable and len(assistant_response) < 200:
                 self._cache_response(user_input, assistant_response)
 
             # 6. Salvar

@@ -28,7 +28,7 @@ class OnlineDictionary:
     Dicionário online usando múltiplas fontes
     """
     
-    def __init__(self, cache_file: str = "dictionary_cache.json"):
+    def __init__(self, cache_file: str = "data/dictionary_cache.json"):
         self.cache_file = cache_file
         self.cache = {}
         self.cache_expires = {}
@@ -215,21 +215,18 @@ class EVESpellChecker:
             'portugues': 'português',
             'frances': 'francês',
             'ingles': 'inglês',
-            'pais': 'país',
             'historico': 'histórico',
             'politica': 'política',
             'economico': 'econômico',
-            
+
             # Erros comuns do modelo
+            # ATENÇÃO: nunca adicionar aqui palavras que TAMBÉM são válidas
+            # sem acento — ex.: 'esta' (pronome), 'pais' (plural de pai),
+            # 'e' (conjunção). A correção é incondicional e corrompe o texto.
             'tambem': 'também',
             'nao': 'não',
             'voce': 'você',
-            'esta': 'está',
             'ate': 'até',
-            'so': 'só',
-            'ja': 'já',
-            'la': 'lá',
-            'ca': 'cá',
             
             # Palavras técnicas comuns
             'codigo': 'código',

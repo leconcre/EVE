@@ -14,7 +14,7 @@ logger.setLevel(logging.INFO)
 class WebSearchTool:
     """
     Ferramenta de busca web com múltiplas fontes
-    ORDEM: Google → DuckDuckGo → Wikipedia PT → Wikipedia EN → SearXNG
+    ORDEM: Wikipedia EN → Wikipedia PT → DuckDuckGo → Google → SearXNG
     """
     
     def __init__(self):
@@ -36,8 +36,8 @@ class WebSearchTool:
         CORREÇÃO: Tenta TODAS as fontes em paralelo e aceita o primeiro resultado válido
         Prioridade: Wikipedia EN > Wikipedia PT > DuckDuckGo > Google > SearXNG
         """
-        # Recheck internet
-        if (datetime.now() - self.last_check).seconds > 60:
+        # Recheck internet (.total_seconds() — .seconds zera a cada 24h)
+        if (datetime.now() - self.last_check).total_seconds() > 60:
             self.available = self._check_internet()
             self.last_check = datetime.now()
 

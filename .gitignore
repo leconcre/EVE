@@ -12,6 +12,7 @@ data/*.json
 logs/
 discord_audios/
 code_artifacts/
+voice/cache/
 
 # Arquivos temporários
 *.backup

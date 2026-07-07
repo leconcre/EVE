@@ -128,9 +128,14 @@ async def on_ready():
     print(f"✅ Servidores: {len(bot.guilds)}")
     print()
 
-    # Carrega EVE
+    # on_ready dispara de novo em reconexões — não recarrega EVE/TTS
+    if eve is not None:
+        print("♻️ Reconectado - EVE já carregada")
+        return
+
+    # Carrega EVE fora do event loop (a inicialização é pesada)
     print("Carregando EVE...")
-    eve = Eve()
+    eve = await asyncio.to_thread(Eve)
     print("✅ EVE carregada!")
 
     # Configura TTS com Francisca
@@ -156,6 +161,9 @@ async def on_ready():
     print("  !falar <texto>     - EVE fala algo")
     print("  !join              - Entrar no canal de voz")
     print("  !leave             - Sair do canal")
+    print("  !listen            - EVE começa a ouvir (STT)")
+    print("  !memoria           - Ver/limpar o que EVE lembra")
+    print("  !status            - Status dos sistemas")
     print("  !help              - Ajuda")
     print()
     print("=" * 60)
@@ -185,9 +193,16 @@ async def perguntar_eve(ctx, *, pergunta: str):
 
     # Mostra que está processando
     async with ctx.typing():
-        # Processa com EVE
+        # Processa com EVE em thread separada — chamada síncrona aqui
+        # bloquearia o event loop inteiro (heartbeat, voz, outros comandos)
         logger.info(f"Pergunta de {ctx.author}: {pergunta}")
-        resposta = eve.generate_response(pergunta)
+
+        # Atribui quem está falando: num servidor várias pessoas conversam
+        # com a EVE e o histórico é compartilhado — sem isso ela mistura
+        # as pessoas ("meu nome é X" de um vira nome de todos)
+        prompt = f"[{ctx.author.display_name} diz]: {pergunta}"
+
+        resposta = await asyncio.to_thread(eve.generate_response, prompt)
         texto = resposta.get('text', '')
 
         if not texto:
@@ -196,17 +211,81 @@ async def perguntar_eve(ctx, *, pergunta: str):
 
         # Envia resposta no chat
         # Discord tem limite de 2000 caracteres
-        if len(texto) > 2000:
-            # Divide em partes
-            partes = [texto[i:i+2000] for i in range(0, len(texto), 2000)]
-            for parte in partes:
-                await ctx.send(parte)
+        prefixo = "🤖 **EVE:** "
+        if len(prefixo) + len(texto) > 2000:
+            # Divide em partes (a primeira leva o prefixo)
+            tamanho = 2000 - len(prefixo)
+            partes = [texto[i:i+tamanho] for i in range(0, len(texto), tamanho)]
+            for i, parte in enumerate(partes):
+                await ctx.send(f"{prefixo}{parte}" if i == 0 else parte)
         else:
-            await ctx.send(f"🤖 **EVE:** {texto}")
+            await ctx.send(f"{prefixo}{texto}")
 
         # Gera áudio se tiver em canal de voz
         if ctx.voice_client:
             await gerar_e_falar(ctx, texto)
+
+
+@bot.command(name="memoria", help="Mostra o que EVE lembra (!memoria limpar para apagar)")
+async def memoria(ctx, acao: str = None):
+    """Mostra ou limpa a memória da EVE."""
+    if not eve:
+        await ctx.send("❌ EVE ainda não está pronta!")
+        return
+
+    if acao and acao.lower() in ("limpar", "clear", "apagar"):
+        if eve.layered_memory:
+            eve.layered_memory.clear_all()
+        if eve.memory:
+            eve.memory.clear_memory()
+        eve.clear_conversation_history()
+        await ctx.send("🧹 Memória limpa! Começando do zero.")
+        logger.info(f"Memória limpa por {ctx.author}")
+        return
+
+    linhas = ["🧠 **O que eu lembro:**"]
+    if eve.layered_memory:
+        stats = eve.layered_memory.get_stats()
+        linhas.append(f"- {stats['long_term_count']} fatos de longo prazo")
+        linhas.append(f"- {stats['preferences_count']} preferências")
+        linhas.append(f"- {stats['short_term_count']} mensagens recentes na sessão")
+
+        facts = eve.layered_memory.get_important_facts(top_k=5)
+        if facts:
+            linhas.append("\n**Fatos mais importantes:**")
+            for f in facts:
+                linhas.append(f"• {f.content[:100]} _({f.category})_")
+    else:
+        linhas.append("- (memória em camadas desativada)")
+
+    linhas.append("\nUse `!memoria limpar` para apagar tudo.")
+    await ctx.send("\n".join(linhas)[:2000])
+
+
+@bot.command(name="status", help="Mostra status dos sistemas da EVE")
+async def status(ctx):
+    """Mostra o status dos componentes da EVE."""
+    if not eve:
+        await ctx.send("❌ EVE ainda não está pronta!")
+        return
+
+    stats = await asyncio.to_thread(eve.get_stats)
+    groq_ok = "✅" if stats.get("groq_available") else "❌"
+    web_ok = "✅" if stats.get("web_search_available") else "❌"
+    brain_ok = "✅" if stats.get("brain_v2_available") else "❌"
+    msgs = stats.get("conversation_messages", 0)
+    ouvindo = "🎧 sim" if listening_active else "🔇 não"
+    em_voz = "🔊 sim" if bot.voice_clients else "❌ não"
+
+    await ctx.send(
+        "⚙️ **Status da EVE**\n"
+        f"- Groq (nuvem): {groq_ok}\n"
+        f"- Busca web: {web_ok}\n"
+        f"- Brain V2: {brain_ok}\n"
+        f"- Mensagens na sessão: {msgs}\n"
+        f"- Em canal de voz: {em_voz}\n"
+        f"- Escutando voz: {ouvindo}"
+    )
 
 
 @bot.command(name="falar", help="EVE fala um texto")
@@ -440,8 +519,11 @@ async def on_user_spoke(voice_input: VoiceInput):
         admin_tag = " [ADMIN]" if voice_input.is_admin else ""
         logger.info(f"🎤 {voice_input.username}{creator_tag}{admin_tag}: {voice_input.text}")
 
-        # Processa com EVE
-        response = eve.generate_response(voice_input.text)
+        # Processa com EVE em thread separada (não bloqueia o event loop,
+        # que precisa continuar cuidando do áudio e do heartbeat)
+        # Atribui quem falou para a EVE não misturar as pessoas do canal
+        prompt = f"[{voice_input.username} diz]: {voice_input.text}"
+        response = await asyncio.to_thread(eve.generate_response, prompt)
         response_text = response.get('text', '')
 
         if not response_text:
@@ -630,12 +712,15 @@ if __name__ == "__main__":
     print()
 
     try:
+        # bot.run() captura o Ctrl+C internamente e retorna após o cleanup,
+        # então o shutdown da EVE fica no finally (sempre executa)
         bot.run(TOKEN)
-    except KeyboardInterrupt:
-        print("\n\n👋 Encerrando bot...")
-        if eve:
-            eve.shutdown()
     except Exception as e:
         print(f"\n❌ Erro ao iniciar bot: {e}")
         import traceback
         traceback.print_exc()
+    finally:
+        print("\n\n👋 Encerrando bot...")
+        if eve:
+            eve.shutdown()
+            print("✅ Memória e estado da EVE salvos.")

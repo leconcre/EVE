@@ -1,6 +1,12 @@
+# EVE - Requirements principais (CLI + GUI)
+# Para o bot Discord com voz, veja requirements_voice_recv.txt
+
 requests>=2.31.0
-groq>=0.4.0
 python-dotenv>=1.0.0
 pyspellchecker>=0.7.0
 customtkinter>=5.2.0
 Pillow>=10.0.0
+
+# Nota: o acesso ao Groq é feito via API REST com requests
+# (a lib oficial "groq" não é usada pelo código)
+# Ollama deve estar instalado e rodando localmente: https://ollama.com
