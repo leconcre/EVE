@@ -131,15 +131,15 @@ def main():
             if any(word in user_input.lower() for word in complex_words):
                 max_tokens = 2048
 
-            # Streaming: imprime o texto conforme o modelo local gera
-            # (Groq responde rápido e chega de uma vez, sem chunks)
+            # Streaming: imprime o texto conforme o modelo gera
+            # (funciona tanto para Groq/nuvem quanto para Ollama/local)
             stream_state = {"started": False}
 
             def stream_chunk(chunk):
                 if not stream_state["started"]:
                     stream_state["started"] = True
                     clear_line()
-                    sys.stdout.write("EVE 💻: ")
+                    sys.stdout.write("EVE: ")
                 sys.stdout.write(chunk)
                 sys.stdout.flush()
 

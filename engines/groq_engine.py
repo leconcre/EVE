@@ -1,20 +1,24 @@
 # engines/groq_engine.py - Backend Groq para EVE
 """
-Groq API Engine - Llama 3.1 70B na nuvem
-Rápido e confiável para geração de código
+Groq API Engine - inferência rápida na nuvem
+Rápido e confiável para chat e geração de código
 
-MODELOS DE PRODUÇÃO (NOVOS):
-- llama-3.3-70b-versatile (novo modelo grande recomendado)
-- llama-3.1-8b-instant (rápido para tarefas simples)
-- openai/gpt-oss-120b (alternativa OpenAI)
+MODELOS DE PRODUÇÃO (julho/2026):
+- openai/gpt-oss-120b (flagship: raciocínio, código e agentes)
+- openai/gpt-oss-20b (rápido e barato para chat geral)
+- qwen/qwen3.6-27b (visão + raciocínio, preview)
+- llama-3.3-70b-versatile (LEGADO — deprecado, shutdown 16/08/2026)
 """
 
 import requests
 import logging
 import json
+import os
 from typing import Optional, Tuple, List
 import time
 import re
+
+from core.errors import GenerationAborted
 
 logger = logging.getLogger("groq.engine")
 logger.setLevel(logging.INFO)
@@ -137,7 +141,10 @@ class GroqEngine:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.base_url = "https://api.groq.com/openai/v1/chat/completions"
-        self.default_model = "llama-3.3-70b-versatile"
+        # Flagship de produção (jul/2026). Pode ser sobrescrito via env.
+        self.default_model = os.environ.get(
+            "EVE_GROQ_MODEL", "openai/gpt-oss-120b"
+        )
         self._models_cache = None
         self._models_cache_time = 0
         logger.info("GroqEngine inicializado")
@@ -170,6 +177,58 @@ CODE RULES:
 
 REMEMBER: You are EVE. Your explanations should feel like a friend explaining code, not a documentation page."""
     
+    def _stream_completion(
+        self,
+        headers: dict,
+        data: dict,
+        timeout: int,
+        stream_callback
+    ) -> str:
+        """
+        Faz a requisição em modo streaming (SSE), chamando
+        stream_callback(chunk) a cada pedaço de texto recebido.
+
+        Returns:
+            Texto completo acumulado
+        """
+        data = dict(data)
+        data["stream"] = True
+
+        full_text = ""
+        with requests.post(
+            self.base_url, headers=headers, json=data,
+            timeout=timeout, stream=True
+        ) as response:
+            response.raise_for_status()
+            # SSE sem charset declarado: requests assumiria ISO-8859-1
+            response.encoding = "utf-8"
+            for line in response.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data:"):
+                    continue
+                payload = line[len("data:"):].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    event = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                choices = event.get("choices") or []
+                if not choices:
+                    continue
+                chunk = choices[0].get("delta", {}).get("content", "")
+                if chunk:
+                    full_text += chunk
+                    try:
+                        stream_callback(chunk)
+                    except GenerationAborted:
+                        # Cancelamento pedido pela UI: sair do "with" fecha
+                        # a conexão e interrompe a geração no servidor
+                        raise
+                    except Exception as cb_err:
+                        # Callback da UI não pode derrubar a geração
+                        logger.warning(f"stream_callback falhou: {cb_err}")
+        return full_text
+
     def generate(
         self,
         prompt: str,
@@ -177,30 +236,33 @@ REMEMBER: You are EVE. Your explanations should feel like a friend explaining co
         temperature: float = 0.3,
         max_tokens: int = 4000,
         timeout: int = 45,  # CORREÇÃO: Reduzido de 60 para 45 segundos
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
+        stream_callback=None
     ) -> str:
         """
         Gera resposta usando Groq API
-        
+
         Args:
             prompt: Texto do prompt
-            model: Modelo a usar (padrão: llama-3.1-70b-versatile)
+            model: Modelo a usar (padrão: self.default_model)
             temperature: Criatividade (0.0-1.0)
             max_tokens: Máximo de tokens na resposta
             timeout: Timeout em segundos
             system_prompt: Prompt de sistema opcional
-            
+            stream_callback: Função chamada com cada pedaço de texto
+                durante a geração (ativa modo streaming SSE)
+
         Returns:
             Texto gerado pelo modelo
         """
         if model is None:
             model = self.default_model
-        
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        
+
         # Monta mensagens
         messages = []
 
@@ -215,12 +277,12 @@ REMEMBER: You are EVE. Your explanations should feel like a friend explaining co
                 "role": "system",
                 "content": self._get_code_system_prompt()
             })
-        
+
         messages.append({
             "role": "user",
             "content": prompt
         })
-        
+
         data = {
             "model": model,
             "messages": messages,
@@ -229,10 +291,18 @@ REMEMBER: You are EVE. Your explanations should feel like a friend explaining co
             "top_p": 1,
             "stream": False
         }
-        
+
         try:
             logger.info(f"🚀 Groq request: modelo={model}, temp={temperature}")
-            
+
+            if stream_callback is not None:
+                text = self._stream_completion(headers, data, timeout, stream_callback)
+                if text:
+                    logger.info(f"✅ Groq OK (streaming): {len(text)} chars")
+                    return text
+                logger.error("❌ Resposta vazia no streaming")
+                return "[ERRO] Groq retornou resposta vazia"
+
             response = requests.post(
                 self.base_url,
                 headers=headers,
@@ -577,13 +647,15 @@ GENERATE THE COMPLETE CODE NOW (start with ```{normalized_lang}):"""
                 "content": self._get_code_system_prompt()
             })
 
-            # Inclui histórico de conversa (últimas mensagens relevantes)
+            # Inclui histórico de conversa (últimas mensagens relevantes).
+            # Enxuto de propósito: o free tier da Groq tem só 8K TPM —
+            # histórico grande causa "413 Payload Too Large".
             if conversation_history:
-                for msg in conversation_history[-8:]:
+                for msg in conversation_history[-4:]:
                     role = msg.get("role", "user")
                     content = msg.get("content", "")
                     if role in ("user", "assistant") and content:
-                        messages.append({"role": role, "content": content[:2000]})
+                        messages.append({"role": role, "content": content[:1200]})
 
             messages.append({"role": "user", "content": prompt})
 
@@ -743,7 +815,8 @@ GERE O CÓDIGO CORRIGIDO AGORA (cada #include em linha separada, todos os membro
         except Exception as e:
             logger.error(f"❌ Falha ao buscar modelos Groq: {e}")
             # Retorna uma lista de fallback em caso de erro
-            return ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+            return ["openai/gpt-oss-120b", "openai/gpt-oss-20b",
+                    "llama-3.3-70b-versatile"]
 
 
 # Função auxiliar para criar engine

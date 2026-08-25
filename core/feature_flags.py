@@ -56,9 +56,15 @@ class FeatureFlags:
     def load(cls, path: Optional[str] = None) -> 'FeatureFlags':
         """Carrega flags de arquivo JSON"""
         if path is None:
-            # Procurar no diretório do projeto
-            project_root = Path(__file__).parent.parent
-            path = project_root / 'data' / 'eve_features.json'
+            # Preferir o data/ do diretório de trabalho (padrão do runtime:
+            # eve_web/GUI fazem chdir para a raiz; no exe PyInstaller o
+            # __file__ aponta para dentro do bundle e não serve de base)
+            cwd_path = Path('data') / 'eve_features.json'
+            if cwd_path.exists():
+                path = cwd_path
+            else:
+                project_root = Path(__file__).parent.parent
+                path = project_root / 'data' / 'eve_features.json'
 
         path = Path(path)
 
@@ -78,8 +84,12 @@ class FeatureFlags:
     def save(self, path: Optional[str] = None):
         """Salva flags em arquivo JSON"""
         if path is None:
-            project_root = Path(__file__).parent.parent
-            path = project_root / 'data' / 'eve_features.json'
+            # Espelha a lógica do load(): CWD primeiro (ver comentário lá)
+            if (Path('data')).is_dir():
+                path = Path('data') / 'eve_features.json'
+            else:
+                project_root = Path(__file__).parent.parent
+                path = project_root / 'data' / 'eve_features.json'
 
         path = Path(path)
 

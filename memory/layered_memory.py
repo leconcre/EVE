@@ -642,6 +642,30 @@ class LayeredMemory:
 
             return stats
 
+    def forget_last_exchange(self, user_prompt: Optional[str] = None):
+        """
+        Desfaz o último add_exchange — usado ao regenerar uma resposta.
+
+        Remove o exchange mais recente do curto prazo e invalida a entrada
+        do response_cache do prompt (senão a regeneração devolve a resposta
+        antiga do cache, que é persistido em disco).
+        """
+        with self._lock:
+            if self.short_term:
+                self.short_term.pop()
+            self._messages_since_summary = max(0, self._messages_since_summary - 1)
+            if user_prompt:
+                normalized = self._normalize_for_cache(user_prompt)
+                self.response_cache.pop(normalized, None)
+            self._save()
+
+    def forget_cached_response(self, user_prompt: str):
+        """Invalida só a entrada de cache de um prompt (sem tocar no curto prazo)."""
+        with self._lock:
+            normalized = self._normalize_for_cache(user_prompt)
+            if self.response_cache.pop(normalized, None) is not None:
+                self._save()
+
     def clear_short_term(self):
         """Limpa buffer de curto prazo"""
         with self._lock:

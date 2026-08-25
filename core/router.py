@@ -20,6 +20,8 @@ import base64
 import re
 from typing import Optional, Tuple, Union
 
+from core.errors import GenerationAborted
+
 logger = logging.getLogger("eve.router")
 logger.setLevel(logging.INFO)
 
@@ -32,13 +34,20 @@ REQUEST_TIMEOUT = float(os.getenv("EVE_REQUEST_TIMEOUT", "300"))
 MAX_RETRIES = int(os.getenv("EVE_MAX_RETRIES", "2"))
 RETRY_BACKOFF = float(os.getenv("EVE_RETRY_BACKOFF", "3.0"))
 
+# Modelos padrão por papel (linha 2026) — sobrescreva via variáveis de
+# ambiente para usar outros modelos já baixados no Ollama.
+CHAT_MODEL = os.getenv("EVE_CHAT_MODEL", "qwen3.5:9b")
+CODE_MODEL = os.getenv("EVE_CODE_MODEL", "qwen2.5-coder:7b")
+REASON_MODEL = os.getenv("EVE_REASON_MODEL", "deepseek-r1:8b")
+VISION_MODEL = os.getenv("EVE_VISION_MODEL", "qwen3-vl:8b")
+
 # Mapa de modelos disponíveis
 MODEL_MAP = {
-    "llama3.1:8b": "ollama",      # Chat geral
-    "phi3:3.8b": "ollama",         # Código (backup, Groq preferido)
-    "qwen2.5": "ollama",           # Raciocínio
-    "qwen3-vl:8b": "ollama",       # Imagens
-    "groq": "groq",                # API externa Groq
+    CHAT_MODEL: "ollama",         # Chat geral
+    CODE_MODEL: "ollama",         # Código (backup, Groq preferido)
+    REASON_MODEL: "ollama",       # Raciocínio
+    VISION_MODEL: "ollama",       # Imagens
+    "groq": "groq",               # API externa Groq
 }
 
 # Palavras-chave para detecção de intenção
@@ -64,14 +73,14 @@ INTENT_KEYWORDS = {
 
 # Mapeamento de intenção para modelo
 INTENT_TO_MODEL = {
-    "code": "phi3:3.8b",        # Código (Groq preferido se disponível)
-    "chat": "llama3.1:8b",      # Chat normal
-    "reason": "qwen2.5",        # Raciocínio
-    "image": "qwen3-vl:8b",     # Imagens
+    "code": CODE_MODEL,         # Código (Groq preferido se disponível)
+    "chat": CHAT_MODEL,         # Chat normal
+    "reason": REASON_MODEL,     # Raciocínio
+    "image": VISION_MODEL,      # Imagens
 }
 
 # Modelos de visão (aceitam imagens)
-VISION_MODELS = ["qwen3-vl:8b"]
+VISION_MODELS = [VISION_MODEL]
 
 # ═══════════════════════════════════════════════════════════════════
 # FUNÇÕES DE DETECÇÃO E ROTEAMENTO
@@ -146,7 +155,7 @@ def resolve_model(prompt: Union[str, dict], explicit_model: Optional[str] = None
     if intent == "image":
         model_id = VISION_MODELS[0]  # Sempre Qwen3-VL para imagens
     else:
-        model_id = INTENT_TO_MODEL.get(intent, "llama3.1:8b")
+        model_id = INTENT_TO_MODEL.get(intent, CHAT_MODEL)
     
     backend = MODEL_MAP.get(model_id, "ollama")
     
@@ -199,20 +208,33 @@ def _clean_thinking_text(text: str) -> str:
     return text.strip()
 
 
+def _strip_inline_thinking(text: str) -> str:
+    """
+    Remove blocos <think>...</think> que alguns modelos (ex.: deepseek-r1)
+    embutem na resposta mesmo com think=false. Bloco não fechado (resposta
+    cortada pelo num_predict) também é removido.
+    """
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    cleaned = re.sub(r"<think>.*\Z", "", cleaned, flags=re.DOTALL)
+    return cleaned.strip()
+
+
 def _extract_response_from_ollama(data: dict, model: str) -> str:
     """
     Extrai resposta do formato JSON do Ollama.
     Suporta campo 'thinking' do Qwen3-VL.
-    
+
     Args:
         data: Dicionário JSON retornado pelo Ollama
         model: Nome do modelo usado
-        
+
     Returns:
         Texto da resposta extraído
     """
     # Tenta campo 'response' padrão
     text = data.get("response", "").strip()
+    if text:
+        text = _strip_inline_thinking(text)
     if text:
         return text
     
@@ -268,6 +290,8 @@ def _ollama_stream(
     with requests.post(url, json=payload, headers=headers,
                        timeout=timeout, stream=True) as resp:
         resp.raise_for_status()
+        # NDJSON sem charset declarado: garante decodificação UTF-8
+        resp.encoding = "utf-8"
         for line in resp.iter_lines(decode_unicode=True):
             if not line:
                 continue
@@ -281,6 +305,10 @@ def _ollama_stream(
                 full_response += chunk
                 try:
                     stream_callback(chunk)
+                except GenerationAborted:
+                    # Cancelamento pedido pela UI: sair do "with" fecha o
+                    # socket e o Ollama interrompe a geração no servidor
+                    raise
                 except Exception as cb_err:
                     # Callback da UI não pode derrubar a geração
                     logger.warning(f"stream_callback falhou: {cb_err}")
@@ -347,6 +375,7 @@ def _ollama_generate(
             "prompt": prompt.get("text", "Descreva esta imagem"),
             "images": [image_b64],
             "stream": False,
+            "think": False,  # visão: resposta direta, sem gastar tokens em thinking
             "options": {
                 "num_predict": max_tokens,
                 "temperature": temperature,
@@ -360,6 +389,10 @@ def _ollama_generate(
             "model": model,
             "prompt": prompt if isinstance(prompt, str) else str(prompt),
             "stream": False,
+            # Desliga o modo thinking (qwen3.5 etc.): sem isso o modelo gasta
+            # o num_predict raciocinando no campo "thinking" e o "response"
+            # volta vazio. Modelos sem thinking ignoram o campo (Ollama 0.31).
+            "think": False,
             "options": {
                 "num_predict": max_tokens,
                 "temperature": temperature,
@@ -422,6 +455,10 @@ def _ollama_generate(
                 logger.info("✅ Resposta recebida (single JSON)")
                 return data
                 
+        except GenerationAborted:
+            # Cancelamento não é falha: nunca faz retry
+            raise
+
         except requests.exceptions.Timeout:
             logger.error(f"⏱️ Timeout (tentativa {attempt}/{MAX_RETRIES})")
             if attempt == MAX_RETRIES:

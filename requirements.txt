@@ -1,4 +1,4 @@
-# EVE - Requirements principais (CLI + GUI)
+# EVE - Requirements principais (Web + CLI + GUI)
 # Para o bot Discord com voz, veja requirements_voice_recv.txt
 
 requests>=2.31.0
@@ -6,6 +6,11 @@ python-dotenv>=1.0.0
 pyspellchecker>=0.7.0
 customtkinter>=5.2.0
 Pillow>=10.0.0
+
+# Interface web (eve_web.py)
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
 
 # Nota: o acesso ao Groq é feito via API REST com requests
 # (a lib oficial "groq" não é usada pelo código)

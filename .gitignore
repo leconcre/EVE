@@ -14,8 +14,14 @@ discord_audios/
 code_artifacts/
 voice/cache/
 
+# Build do executável (PyInstaller)
+build/
+dist/
+*.spec
+
 # Arquivos temporários
 *.backup
+*.bak
 nul
 
 # IDE

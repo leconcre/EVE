@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark light">
+  <title>EVE</title>
+  <link rel="icon" href="/eve_icon.ico">
+  <link rel="stylesheet" href="/style.css?v=5.0.4">
+</head>
+<body>
+  <div class="app" id="app">
+
+    <!-- ═══════════ SIDEBAR ═══════════ -->
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-avatar">
+          <img src="/avatar" alt="EVE" onerror="this.parentElement.classList.add('no-img')">
+          <span class="brand-avatar-fallback">E</span>
+        </div>
+        <div class="brand-text">
+          <h1>EVE</h1>
+          <span class="brand-sub">Assistente pessoal</span>
+        </div>
+        <button class="icon-btn sidebar-close" id="btn-sidebar-close" title="Fechar menu" aria-label="Fechar menu"></button>
+      </div>
+
+      <button class="btn-new" id="btn-new">
+        <span class="btn-new-icon" aria-hidden="true"></span>
+        Nova conversa
+        <kbd class="kbd">Ctrl+Shift+O</kbd>
+      </button>
+
+      <label class="search" for="search">
+        <span class="search-icon" aria-hidden="true"></span>
+        <input type="search" id="search" placeholder="Buscar conversas" autocomplete="off">
+        <kbd class="kbd">Ctrl+K</kbd>
+      </label>
+
+      <nav class="chats" id="chats" aria-label="Conversas"></nav>
+
+      <div class="sidebar-foot">
+        <div class="engines" id="engines">
+          <div class="engine" id="engine-groq">
+            <span class="engine-dot" aria-hidden="true"></span>
+            <span class="engine-name">Groq · nuvem</span>
+            <span class="engine-state">—</span>
+          </div>
+          <div class="engine" id="engine-ollama">
+            <span class="engine-dot" aria-hidden="true"></span>
+            <span class="engine-name">Ollama · local</span>
+            <span class="engine-state">—</span>
+          </div>
+        </div>
+        <div class="foot-actions">
+          <button class="icon-btn" id="btn-export" title="Exportar conversa (.md)" aria-label="Exportar conversa"></button>
+          <button class="icon-btn" id="btn-memory" title="Limpar memória de longo prazo" aria-label="Limpar memória"></button>
+          <button class="icon-btn" id="btn-theme" title="Alternar tema" aria-label="Alternar tema"></button>
+        </div>
+      </div>
+    </aside>
+    <div class="sidebar-scrim" id="sidebar-scrim" hidden></div>
+
+    <!-- ═══════════ MAIN ═══════════ -->
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn btn-burger" id="btn-burger" title="Menu" aria-label="Abrir menu"></button>
+        <h2 class="topbar-title" id="topbar-title">Nova conversa</h2>
+        <button class="model-pick" id="btn-model" aria-haspopup="menu" aria-expanded="false">
+          <span class="model-pick-icon" aria-hidden="true"></span>
+          <span class="model-pick-label" id="model-pick-label">Automático</span>
+          <span class="model-pick-chevron" aria-hidden="true"></span>
+        </button>
+      </header>
+
+      <div class="messages-wrap">
+        <section class="messages" id="messages" aria-live="polite"></section>
+        <button class="jump-end" id="btn-jump" title="Ir para o fim" aria-label="Ir para o fim" hidden></button>
+      </div>
+
+      <footer class="composer-wrap">
+        <div class="attachments" id="attachments"></div>
+        <div class="composer" id="composer">
+          <button class="composer-btn" id="btn-attach" title="Anexar imagem — o modelo de visão analisa" aria-label="Anexar imagem"></button>
+          <button class="composer-btn" id="btn-code" title="Modo código — força o modelo forte de código na nuvem" aria-label="Modo código"></button>
+          <textarea id="input" rows="1" placeholder="Fale com a EVE…" aria-label="Mensagem"></textarea>
+          <button class="composer-send" id="btn-send" title="Enviar (Enter)" aria-label="Enviar"></button>
+        </div>
+        <div class="composer-hint" id="hint"><span class="hint-keys">Enter envia · Shift+Enter quebra linha · Esc interrompe</span></div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Menu do seletor de modelo -->
+  <div class="model-menu" id="model-menu" role="menu" hidden></div>
+
+  <!-- Modal de confirmação -->
+  <div class="modal-overlay" id="modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-icon" id="modal-icon" aria-hidden="true"></div>
+      <p id="modal-text"></p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="modal-no">Cancelar</button>
+        <button class="btn btn-primary" id="modal-yes">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+
+  <input type="file" id="file-input" accept=".png,.jpg,.jpeg,.webp,.bmp,.gif" multiple hidden>
+
+  <script src="/app.js?v=5.0.4"></script>
+</body>
+</html>

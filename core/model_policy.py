@@ -112,7 +112,7 @@ class ModelUsagePolicy:
                 r'^(?:tudo bem|como vai|e ai)[\s?!.]*$',
                 r'^(?:obrigad[oa]|valeu|brigad[oa])[\s!.]*$',
             ],
-            'use_instead': 'ollama:llama3.1:8b',
+            'use_instead': 'ollama:qwen3.5:9b',
             'reason': 'Desperdicio de recursos para interacao simples'
         },
         'factual_simple': {
@@ -128,14 +128,14 @@ class ModelUsagePolicy:
         'short_question': {
             'description': 'Pergunta muito curta',
             'triggers': [],  # Baseado em tamanho
-            'use_instead': 'ollama:llama3.1:8b',
+            'use_instead': 'ollama:qwen3.5:9b',
             'reason': 'Pergunta simples nao precisa de modelo forte',
             'max_tokens': 20
         },
         'rate_limited': {
             'description': 'Proximo do limite de rate',
             'triggers': [],  # Baseado em estado
-            'use_instead': 'ollama:llama3.1:8b',
+            'use_instead': 'ollama:qwen3.5:9b',
             'reason': 'Preservar quota para tarefas importantes'
         }
     }
@@ -145,13 +145,13 @@ class ModelUsagePolicy:
     # =========================================================================
 
     CAPABILITY_MODELS = {
-        'code_strong': 'groq:llama-3.3-70b',
+        'code_strong': 'groq:openai/gpt-oss-120b',
         'code_fast': 'ollama:qwen2.5-coder:7b',
-        'chat_quality': 'ollama:llama3.1:8b',
-        'chat_fast': 'ollama:llama3.1:8b',
+        'chat_quality': 'ollama:qwen3.5:9b',
+        'chat_fast': 'ollama:qwen3.5:9b',
         'analysis': 'ollama:qwen2.5-coder:7b',
-        'vision': 'ollama:qwen2-vl:7b',
-        'default': 'ollama:llama3.1:8b'
+        'vision': 'ollama:qwen3-vl:8b',
+        'default': 'ollama:qwen3.5:9b'
     }
 
     def __init__(self):
@@ -199,14 +199,14 @@ class ModelUsagePolicy:
                 tier=ModelTier.SKILL,
                 reason="Skill pura pode resolver sem modelo",
                 rule_matched='skill_resolution',
-                alternatives=['ollama:llama3.1:8b']
+                alternatives=['ollama:qwen3.5:9b']
             )
 
         # 2. Forca Groq (botao de codigo)
         if force_groq:
             self._groq_calls_today += 1
             return ModelChoice(
-                model_id='groq:llama-3.3-70b',
+                model_id='groq:openai/gpt-oss-120b',
                 tier=ModelTier.PREMIUM,
                 reason="Modo codigo forcado pelo usuario",
                 rule_matched='force_groq',
@@ -223,20 +223,20 @@ class ModelUsagePolicy:
                         tier=ModelTier.SKILL,
                         reason=rule['reason'],
                         rule_matched=rule_name,
-                        alternatives=['ollama:llama3.1:8b']
+                        alternatives=['ollama:qwen3.5:9b']
                     )
                 return ModelChoice(
                     model_id=model,
                     tier=ModelTier.STANDARD,
                     reason=rule['reason'],
                     rule_matched=rule_name,
-                    alternatives=['groq:llama-3.3-70b']
+                    alternatives=['groq:openai/gpt-oss-120b']
                 )
 
         # 4. Verificar rate limit
         if self._is_rate_limited():
             return ModelChoice(
-                model_id='ollama:llama3.1:8b',
+                model_id='ollama:qwen3.5:9b',
                 tier=ModelTier.STANDARD,
                 reason="Proximo do limite diario de Groq",
                 rule_matched='rate_limited',
@@ -249,11 +249,11 @@ class ModelUsagePolicy:
             if confidence >= rule.get('min_confidence', 0.5):
                 self._groq_calls_today += 1
                 return ModelChoice(
-                    model_id='groq:llama-3.3-70b',
+                    model_id='groq:openai/gpt-oss-120b',
                     tier=ModelTier.PREMIUM,
                     reason=rule['reason'],
                     rule_matched=rule_name,
-                    alternatives=['ollama:qwen2.5-coder:7b', 'ollama:llama3.1:8b']
+                    alternatives=['ollama:qwen2.5-coder:7b', 'ollama:qwen3.5:9b']
                 )
 
         # 6. Baseado em capability
@@ -272,11 +272,11 @@ class ModelUsagePolicy:
 
         # 7. Default
         return ModelChoice(
-            model_id='ollama:llama3.1:8b',
+            model_id='ollama:qwen3.5:9b',
             tier=ModelTier.STANDARD,
             reason="Modelo padrao para tarefas gerais",
             rule_matched='default',
-            alternatives=['groq:llama-3.3-70b', 'ollama:qwen2.5-coder:7b']
+            alternatives=['groq:openai/gpt-oss-120b', 'ollama:qwen2.5-coder:7b']
         )
 
     # =========================================================================

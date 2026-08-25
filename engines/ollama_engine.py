@@ -38,7 +38,7 @@ class OllamaEngine:
         Gera resposta do modelo Ollama.
 
         Args:
-            model: Nome do modelo (ex: "llama3.1:8b", "qwen3-vl:8b")
+            model: Nome do modelo (ex: "qwen3.5:9b", "qwen3-vl:8b")
             prompt: String ou dict com prompt (dict para imagens)
             temperature: Temperatura (0.0-1.0)
             max_tokens: Máximo de tokens

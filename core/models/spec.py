@@ -39,7 +39,7 @@ class ModelSpec:
     """
     # === Identificação ===
     provider: str                     # 'ollama', 'groq', 'openai'
-    model_id: str                     # 'llama3.1:8b', 'llama-3.3-70b-versatile'
+    model_id: str                     # 'qwen3.5:9b', 'openai/gpt-oss-120b'
     display_name: str                 # Nome amigável para exibição
 
     # === Capabilities ===
@@ -114,92 +114,115 @@ class ModelSpec:
 
 MODEL_REGISTRY: List[ModelSpec] = [
     # =========================================================================
-    # LOCAL (Ollama)
+    # LOCAL (Ollama) — linha 2026
     # =========================================================================
 
     ModelSpec(
         provider='ollama',
-        model_id='llama3.1:8b',
-        display_name='Llama 3.1 8B',
+        model_id='qwen3.5:9b',
+        display_name='Qwen 3.5 9B',
         capabilities=[
             ModelCapability.CHAT_FAST,
             ModelCapability.CHAT_STRONG,
+            ModelCapability.REASONING,
+            ModelCapability.VISION,
+            ModelCapability.SUMMARIZATION,
             ModelCapability.MULTILINGUAL
         ],
-        primary_capability=ModelCapability.CHAT_FAST,
-        context_window=8192,
-        max_output_tokens=4096,
-        speed_score=0.8,
-        quality_score=0.6,
+        primary_capability=ModelCapability.CHAT_STRONG,
+        context_window=262144,
+        max_output_tokens=16384,
+        speed_score=0.75,
+        quality_score=0.85,
         reliability_score=0.95,
         cost_score=1.0,
         is_local=True,
-        vram_required_gb=5.0,
-        tags=['chat', 'conversação', 'geral', 'rápido']
+        vram_required_gb=9.0,
+        tags=['chat', 'conversação', 'geral', 'thinking', 'multimodal']
     ),
 
     ModelSpec(
         provider='ollama',
-        model_id='llama3.2:3b',
-        display_name='Llama 3.2 3B',
+        model_id='gemma4:12b',
+        display_name='Gemma 4 12B',
+        capabilities=[
+            ModelCapability.CHAT_STRONG,
+            ModelCapability.VISION,
+            ModelCapability.SUMMARIZATION,
+            ModelCapability.MULTILINGUAL
+        ],
+        primary_capability=ModelCapability.MULTILINGUAL,
+        context_window=262144,
+        max_output_tokens=16384,
+        speed_score=0.6,
+        quality_score=0.85,
+        reliability_score=0.95,
+        cost_score=1.0,
+        is_local=True,
+        vram_required_gb=10.0,
+        tags=['chat', 'multilingue', 'google', 'multimodal']
+    ),
+
+    ModelSpec(
+        provider='ollama',
+        model_id='qwen3.5:4b',
+        display_name='Qwen 3.5 4B',
         capabilities=[
             ModelCapability.CHAT_FAST,
             ModelCapability.MULTILINGUAL
         ],
         primary_capability=ModelCapability.CHAT_FAST,
-        context_window=8192,
-        max_output_tokens=4096,
+        context_window=262144,
+        max_output_tokens=8192,
         speed_score=0.95,
-        quality_score=0.4,
+        quality_score=0.6,
         reliability_score=0.95,
         cost_score=1.0,
         is_local=True,
-        vram_required_gb=2.5,
+        vram_required_gb=4.5,
         tags=['chat', 'rápido', 'leve']
     ),
 
     ModelSpec(
         provider='ollama',
-        model_id='qwen2.5:7b',
-        display_name='Qwen 2.5 7B',
+        model_id='qwen3-coder:30b',
+        display_name='Qwen3-Coder 30B (MoE A3B)',
         capabilities=[
-            ModelCapability.CHAT_FAST,
-            ModelCapability.CHAT_STRONG,
-            ModelCapability.REASONING,
-            ModelCapability.MULTILINGUAL
+            ModelCapability.CODE_STRONG,
+            ModelCapability.CODE_REVIEW
         ],
-        primary_capability=ModelCapability.REASONING,
-        context_window=32768,
-        max_output_tokens=8192,
-        speed_score=0.7,
-        quality_score=0.65,
-        reliability_score=0.95,
+        primary_capability=ModelCapability.CODE_STRONG,
+        context_window=262144,
+        max_output_tokens=16384,
+        speed_score=0.6,
+        quality_score=0.9,
+        reliability_score=0.9,
         cost_score=1.0,
         is_local=True,
-        vram_required_gb=5.0,
-        tags=['raciocínio', 'matemática', 'lógica', 'multilingue']
+        vram_required_gb=12.0,  # MoE: usa offload p/ RAM (32GB+ recomendado)
+        default_temperature=0.3,
+        tags=['código', 'programação', 'debug', 'agêntico']
     ),
 
     ModelSpec(
         provider='ollama',
-        model_id='qwen2.5:14b',
-        display_name='Qwen 2.5 14B',
+        model_id='qwen2.5-coder:14b',
+        display_name='Qwen 2.5 Coder 14B',
         capabilities=[
-            ModelCapability.CHAT_STRONG,
-            ModelCapability.REASONING,
             ModelCapability.CODE_STRONG,
-            ModelCapability.MULTILINGUAL
+            ModelCapability.CODE_REVIEW
         ],
-        primary_capability=ModelCapability.CHAT_STRONG,
-        context_window=32768,
+        primary_capability=ModelCapability.CODE_STRONG,
+        context_window=131072,
         max_output_tokens=8192,
-        speed_score=0.5,
+        speed_score=0.7,
         quality_score=0.75,
         reliability_score=0.95,
         cost_score=1.0,
         is_local=True,
-        vram_required_gb=9.0,
-        tags=['avançado', 'raciocínio', 'código']
+        vram_required_gb=10.0,
+        default_temperature=0.3,
+        tags=['código', 'programação', 'debug']
     ),
 
     ModelSpec(
@@ -220,141 +243,119 @@ MODEL_REGISTRY: List[ModelSpec] = [
         is_local=True,
         vram_required_gb=5.0,
         default_temperature=0.3,
-        tags=['código', 'programação', 'debug']
+        tags=['código', 'programação', 'debug', 'leve']
     ),
 
     ModelSpec(
         provider='ollama',
-        model_id='codellama:7b',
-        display_name='Code Llama 7B',
+        model_id='ornith:9b',
+        display_name='Ornith 9B (Código agêntico)',
         capabilities=[
             ModelCapability.CODE_STRONG,
             ModelCapability.CODE_REVIEW
         ],
         primary_capability=ModelCapability.CODE_STRONG,
-        context_window=16384,
-        max_output_tokens=4096,
-        speed_score=0.75,
-        quality_score=0.65,
-        reliability_score=0.95,
-        cost_score=1.0,
-        is_local=True,
-        vram_required_gb=5.0,
-        default_temperature=0.3,
-        tags=['código', 'programação']
-    ),
-
-    ModelSpec(
-        provider='ollama',
-        model_id='deepseek-coder:6.7b',
-        display_name='DeepSeek Coder 6.7B',
-        capabilities=[
-            ModelCapability.CODE_STRONG,
-            ModelCapability.CODE_REVIEW
-        ],
-        primary_capability=ModelCapability.CODE_STRONG,
-        context_window=16384,
-        max_output_tokens=4096,
+        context_window=262144,
+        max_output_tokens=16384,
         speed_score=0.7,
-        quality_score=0.72,
-        reliability_score=0.95,
+        quality_score=0.85,
+        reliability_score=0.9,   # Lançado em jul/2026 — recente
         cost_score=1.0,
         is_local=True,
-        vram_required_gb=5.0,
+        vram_required_gb=6.0,
         default_temperature=0.3,
-        tags=['código', 'programação', 'deepseek']
+        tags=['código', 'programação', 'agêntico', '2026']
     ),
 
     ModelSpec(
         provider='ollama',
-        model_id='qwen2-vl:7b',
-        display_name='Qwen2 VL 7B (Vision)',
+        model_id='qwen3-vl:8b',
+        display_name='Qwen3-VL 8B (Vision)',
         capabilities=[
             ModelCapability.VISION,
             ModelCapability.CHAT_FAST,
             ModelCapability.ANALYSIS_STRONG
         ],
         primary_capability=ModelCapability.VISION,
-        context_window=8192,
-        max_output_tokens=4096,
-        speed_score=0.5,
-        quality_score=0.7,
-        reliability_score=0.9,
+        context_window=262144,
+        max_output_tokens=8192,
+        speed_score=0.6,
+        quality_score=0.85,
+        reliability_score=0.95,
         cost_score=1.0,
         is_local=True,
-        vram_required_gb=6.0,
+        vram_required_gb=8.0,
         tags=['visão', 'imagem', 'OCR', 'análise visual']
     ),
 
     ModelSpec(
         provider='ollama',
-        model_id='llava:7b',
-        display_name='LLaVA 7B (Vision)',
+        model_id='qwen3-vl:4b',
+        display_name='Qwen3-VL 4B (Vision leve)',
         capabilities=[
             ModelCapability.VISION,
             ModelCapability.CHAT_FAST
         ],
         primary_capability=ModelCapability.VISION,
-        context_window=4096,
-        max_output_tokens=2048,
-        speed_score=0.6,
-        quality_score=0.6,
-        reliability_score=0.9,
-        cost_score=1.0,
-        is_local=True,
-        vram_required_gb=5.5,
-        tags=['visão', 'imagem']
-    ),
-
-    ModelSpec(
-        provider='ollama',
-        model_id='phi3:3.8b',
-        display_name='Phi-3 3.8B',
-        capabilities=[
-            ModelCapability.CHAT_FAST,
-            ModelCapability.REASONING
-        ],
-        primary_capability=ModelCapability.CHAT_FAST,
-        context_window=4096,
-        max_output_tokens=2048,
-        speed_score=0.9,
-        quality_score=0.55,
-        reliability_score=0.95,
-        cost_score=1.0,
-        is_local=True,
-        vram_required_gb=2.5,
-        tags=['rápido', 'leve', 'microsoft']
-    ),
-
-    ModelSpec(
-        provider='ollama',
-        model_id='mistral:7b',
-        display_name='Mistral 7B',
-        capabilities=[
-            ModelCapability.CHAT_FAST,
-            ModelCapability.CHAT_STRONG,
-            ModelCapability.MULTILINGUAL
-        ],
-        primary_capability=ModelCapability.CHAT_STRONG,
-        context_window=8192,
-        max_output_tokens=4096,
+        context_window=262144,
+        max_output_tokens=8192,
         speed_score=0.75,
-        quality_score=0.65,
+        quality_score=0.7,
         reliability_score=0.95,
         cost_score=1.0,
         is_local=True,
-        vram_required_gb=5.0,
-        tags=['chat', 'geral', 'mistral']
+        vram_required_gb=4.0,
+        tags=['visão', 'imagem', 'leve']
+    ),
+
+    ModelSpec(
+        provider='ollama',
+        model_id='deepseek-r1:14b',
+        display_name='DeepSeek-R1 14B',
+        capabilities=[
+            ModelCapability.REASONING,
+            ModelCapability.ANALYSIS_STRONG
+        ],
+        primary_capability=ModelCapability.REASONING,
+        context_window=131072,
+        max_output_tokens=8192,
+        speed_score=0.4,
+        quality_score=0.85,
+        reliability_score=0.95,
+        cost_score=1.0,
+        is_local=True,
+        vram_required_gb=10.0,
+        tags=['raciocínio', 'matemática', 'lógica', 'thinking']
+    ),
+
+    ModelSpec(
+        provider='ollama',
+        model_id='deepseek-r1:8b',
+        display_name='DeepSeek-R1 8B',
+        capabilities=[
+            ModelCapability.REASONING,
+            ModelCapability.ANALYSIS_STRONG
+        ],
+        primary_capability=ModelCapability.REASONING,
+        context_window=131072,
+        max_output_tokens=8192,
+        speed_score=0.55,
+        quality_score=0.75,
+        reliability_score=0.95,
+        cost_score=1.0,
+        is_local=True,
+        vram_required_gb=6.5,
+        tags=['raciocínio', 'matemática', 'lógica', 'thinking', 'leve']
     ),
 
     # =========================================================================
-    # CLOUD (Groq)
+    # CLOUD (Groq) — modelos de produção em julho/2026
     # =========================================================================
 
     ModelSpec(
         provider='groq',
-        model_id='llama-3.3-70b-versatile',
-        display_name='Llama 3.3 70B (Groq)',
+        model_id='openai/gpt-oss-120b',
+        display_name='GPT-OSS 120B (Groq)',
         capabilities=[
             ModelCapability.CHAT_STRONG,
             ModelCapability.CODE_STRONG,
@@ -365,55 +366,33 @@ MODEL_REGISTRY: List[ModelSpec] = [
             ModelCapability.MULTILINGUAL
         ],
         primary_capability=ModelCapability.CODE_STRONG,
-        context_window=128000,
-        max_output_tokens=8000,
+        context_window=131072,
+        max_output_tokens=32768,
         speed_score=0.9,      # Groq é muito rápido
-        quality_score=0.95,
+        quality_score=0.97,
         reliability_score=0.85,  # Depende de internet
         cost_score=0.7,       # API gratuita com limites
         requires_api_key=True,
         is_local=False,
         default_temperature=0.7,
-        tags=['avançado', 'código', 'análise', 'groq', '70b']
+        tags=['avançado', 'código', 'análise', 'raciocínio', 'groq', 'flagship']
     ),
 
     ModelSpec(
         provider='groq',
-        model_id='llama-3.1-70b-versatile',
-        display_name='Llama 3.1 70B (Groq)',
-        capabilities=[
-            ModelCapability.CHAT_STRONG,
-            ModelCapability.CODE_STRONG,
-            ModelCapability.CODE_REVIEW,
-            ModelCapability.ANALYSIS_STRONG,
-            ModelCapability.REASONING,
-            ModelCapability.MULTILINGUAL
-        ],
-        primary_capability=ModelCapability.CHAT_STRONG,
-        context_window=128000,
-        max_output_tokens=8000,
-        speed_score=0.88,
-        quality_score=0.9,
-        reliability_score=0.85,
-        cost_score=0.7,
-        requires_api_key=True,
-        is_local=False,
-        tags=['avançado', 'chat', 'groq', '70b']
-    ),
-
-    ModelSpec(
-        provider='groq',
-        model_id='llama-3.1-8b-instant',
-        display_name='Llama 3.1 8B Instant (Groq)',
+        model_id='openai/gpt-oss-20b',
+        display_name='GPT-OSS 20B (Groq)',
         capabilities=[
             ModelCapability.CHAT_FAST,
+            ModelCapability.CHAT_STRONG,
+            ModelCapability.SUMMARIZATION,
             ModelCapability.MULTILINGUAL
         ],
         primary_capability=ModelCapability.CHAT_FAST,
-        context_window=128000,
-        max_output_tokens=8000,
+        context_window=131072,
+        max_output_tokens=32768,
         speed_score=0.95,
-        quality_score=0.6,
+        quality_score=0.75,
         reliability_score=0.85,
         cost_score=0.8,
         requires_api_key=True,
@@ -423,46 +402,30 @@ MODEL_REGISTRY: List[ModelSpec] = [
 
     ModelSpec(
         provider='groq',
-        model_id='mixtral-8x7b-32768',
-        display_name='Mixtral 8x7B (Groq)',
+        model_id='qwen/qwen3.6-27b',
+        display_name='Qwen 3.6 27B (Groq, Vision)',
         capabilities=[
+            ModelCapability.VISION,
             ModelCapability.CHAT_STRONG,
             ModelCapability.CODE_STRONG,
             ModelCapability.REASONING,
             ModelCapability.MULTILINGUAL
         ],
-        primary_capability=ModelCapability.CHAT_STRONG,
-        context_window=32768,
-        max_output_tokens=4096,
-        speed_score=0.85,
-        quality_score=0.75,
-        reliability_score=0.85,
-        cost_score=0.75,
+        primary_capability=ModelCapability.VISION,
+        context_window=131072,
+        max_output_tokens=32768,
+        speed_score=0.9,
+        quality_score=0.9,
+        reliability_score=0.8,  # Preview
+        cost_score=0.7,
         requires_api_key=True,
         is_local=False,
-        tags=['mixtral', 'moe', 'groq']
+        tags=['visão', 'raciocínio', 'código', 'groq', 'preview']
     ),
 
-    ModelSpec(
-        provider='groq',
-        model_id='gemma2-9b-it',
-        display_name='Gemma 2 9B (Groq)',
-        capabilities=[
-            ModelCapability.CHAT_FAST,
-            ModelCapability.CHAT_STRONG,
-            ModelCapability.MULTILINGUAL
-        ],
-        primary_capability=ModelCapability.CHAT_FAST,
-        context_window=8192,
-        max_output_tokens=4096,
-        speed_score=0.9,
-        quality_score=0.65,
-        reliability_score=0.85,
-        cost_score=0.8,
-        requires_api_key=True,
-        is_local=False,
-        tags=['gemma', 'google', 'groq']
-    ),
+    # Removidos em jul/2026 (deprecados pela Groq):
+    # - qwen/qwen3-32b (shutdown 17/07/2026) → raciocínio agora no gpt-oss-120b
+    # - llama-3.3-70b-versatile (shutdown 16/08/2026) → gpt-oss-120b
 ]
 
 

@@ -43,6 +43,7 @@ except Exception:
 # ═══════════════════════════════════════════════════════════════════
 from core.feature_flags import FLAGS, reload_flags
 from core.cache_policy import is_cacheable_prompt
+from core.errors import GenerationAborted
 
 # ═══════════════════════════════════════════════════════════════════
 # IMPORTAÇÕES OPCIONAIS (graceful degradation)
@@ -743,10 +744,15 @@ Use português brasileiro."""
             decision.metadata['force_code'] = True
             logger.info("🚀 Modo CÓDIGO forçado via model_choice")
 
+        # Override explícito do usuário (seletor de modelo da UI):
+        # pula cache e skills — o usuário quer a resposta DESTE modelo
+        user_override = bool(model_choice) and model_choice != "groq"
+
         # 2. Verificar cache (só para prompts independentes de contexto,
-        #    sem código, skill ou imagem anexada)
+        #    sem código, skill, imagem anexada ou override de modelo)
         if (not files and not decision.needs_skill()
                 and not decision.metadata.get('force_code')
+                and not user_override
                 and is_cacheable_prompt(prompt)):
             cached = self._get_cached_response(prompt)
             if cached:
@@ -759,7 +765,8 @@ Use português brasileiro."""
         # (com imagem anexada, skill é pulada — skills só processam texto
         #  e poderiam interceptar a mensagem antes do modelo de visão)
         skill_output = None
-        if decision.selected_skill and self.skill_registry and not files:
+        if (decision.selected_skill and self.skill_registry and not files
+                and not user_override):
             skill_result = self._execute_skill(decision, prompt)
             if skill_result and skill_result.get('handled'):
                 return skill_result
@@ -953,13 +960,24 @@ Use português brasileiro."""
         # Construir prompt completo
         full_prompt = self._build_full_prompt(prompt, context, decision)
 
+        # Override de modelo da nuvem por request: convenção "groq:<model_id>"
+        # ("groq" puro continua reservado = modo código forçado)
+        groq_model = None
+        if model_choice and model_choice.startswith("groq:"):
+            groq_model = model_choice.split(":", 1)[1] or None
+
+        # Override explícito do usuário (seletor da UI): a escolha dele
+        # prevalece sobre o roteamento por capability do Brain
+        user_override = bool(model_choice) and model_choice != "groq"
+
         # Modo código forçado
         if decision.metadata.get('force_code') or model_choice == "groq":
             if self.groq_engine:
                 return self._generate_code_response(prompt, decision)
 
-        # Usar Groq para tarefas de código
-        if decision.selected_capability == 'code_strong' and self.groq_engine:
+        # Usar Groq para tarefas de código (exceto com override explícito)
+        if (decision.selected_capability == 'code_strong'
+                and self.groq_engine and not user_override):
             return self._generate_code_response(prompt, decision)
 
         # Router por capability (experimental, atrás de flag)
@@ -973,11 +991,14 @@ Use português brasileiro."""
 
         # Chat: tenta Groq primeiro (rápido, nuvem) com fallback local.
         # Resultados de busca web são sempre processados pelo modelo local
-        # (mesma regra do fluxo legado).
+        # (mesma regra do fluxo legado). Um override "groq:<id>" também
+        # entra aqui, com o modelo pedido.
         if (self.groq_engine and not context.get('web_search')
-                and not model_choice):
+                and (not model_choice or groq_model)):
             groq_response = self._generate_groq_chat(
-                full_prompt, max_tokens, temperature
+                full_prompt, max_tokens, temperature,
+                stream_callback=stream_callback,
+                model=groq_model
             )
             if groq_response is not None:
                 return groq_response
@@ -993,22 +1014,58 @@ Use português brasileiro."""
         self,
         full_prompt: str,
         max_tokens: int,
-        temperature: float
+        temperature: float,
+        stream_callback=None,
+        model: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Tenta gerar resposta de chat via Groq (nuvem).
         Retorna None se falhar, para o chamador cair no modelo local.
+        model: id específico da Groq (override por request); None = default.
         """
         logger.info("☁️ Tentando gerar com Groq (nuvem)...")
+        model_label = f"groq:{model}" if model else "groq"
+
+        # Rastreia se algum chunk já chegou à UI: se o streaming falhar no
+        # meio, cair para o modelo local duplicaria o texto já exibido.
+        streamed = {"emitted": False, "buffer": ""}
+        guarded_callback = None
+        if stream_callback is not None:
+            def guarded_callback(chunk):
+                streamed["emitted"] = True
+                streamed["buffer"] += chunk
+                stream_callback(chunk)
+
         try:
             response_text = self.groq_engine.generate(
                 prompt=full_prompt,
+                model=model,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                system_prompt=self.personality
+                system_prompt=self.personality,
+                stream_callback=guarded_callback
             )
+        except GenerationAborted:
+            if streamed["emitted"]:
+                # Interrompida com texto já exibido: o parcial vira a resposta
+                return {
+                    'text': streamed["buffer"],
+                    'artifacts': True if "```" in streamed["buffer"] else None,
+                    'model_used': model_label,
+                    'web_search_used': False
+                }
+            # Interrompida antes do primeiro chunk: NÃO cair no modelo local
+            raise
         except Exception as e:
             logger.warning(f"⚠️ Erro ao usar Groq: {e}")
+            if streamed["emitted"]:
+                # Usa o parcial já exibido em vez de re-gerar no local
+                return {
+                    'text': streamed["buffer"],
+                    'artifacts': True if "```" in streamed["buffer"] else None,
+                    'model_used': model_label,
+                    'web_search_used': False
+                }
             return None
 
         if not response_text or response_text.startswith("[ERRO]"):
@@ -1018,7 +1075,7 @@ Use português brasileiro."""
         return {
             'text': response_text,
             'artifacts': True if "```" in response_text else None,
-            'model_used': 'groq',
+            'model_used': model_label,
             'web_search_used': False
         }
 
@@ -1195,8 +1252,11 @@ REGRAS ESTRITAS:
                 'web_search_used': False
             }
 
-        # "groq" não é um modelo do router local — usa roteamento automático
-        explicit = None if model_choice == "groq" else model_choice
+        # "groq"/"groq:<id>" não são modelos do router local — usa automático
+        explicit = model_choice
+        if model_choice and (model_choice == "groq"
+                             or model_choice.startswith("groq:")):
+            explicit = None
         backend, model_id = self.router.resolve_model(prompt, explicit)
         logger.info(f"💻 Gerando com Ollama: {model_id}")
 
@@ -1584,7 +1644,6 @@ IMPORTANTE: NÃO gere código completamente novo. CORRIJA apenas os erros espec�
                 try:
                     response_text = self.groq_engine.generate(
                         prompt=full_prompt,
-                        model="llama-3.3-70b-versatile",
                         temperature=temperature,
                         max_tokens=max_tokens
                     )
@@ -1722,6 +1781,36 @@ IMPORTANTE: NÃO gere código completamente novo. CORRIJA apenas os erros espec�
         """Limpa histórico da conversa atual"""
         self.conversation_history = []
         logger.info("Histórico de conversa limpo")
+
+    def rollback_last_exchange(self) -> Optional[str]:
+        """
+        Desfaz o último turno (user + assistant) do contexto interno e da
+        memória em camadas — usado pelo "regenerar resposta" da interface.
+
+        Remove também a entrada do response_cache do prompt: sem isso, a
+        regeneração devolveria a resposta antiga instantaneamente do cache.
+
+        Returns:
+            O prompt do usuário removido (para re-gerar), ou None.
+        """
+        # Remove resposta(s) final(is) da assistente e o user anterior
+        while (self.conversation_history
+               and self.conversation_history[-1].get("role") == "assistant"):
+            self.conversation_history.pop()
+
+        user_prompt = None
+        if (self.conversation_history
+                and self.conversation_history[-1].get("role") == "user"):
+            user_prompt = self.conversation_history.pop().get("content")
+
+        if getattr(self, "layered_memory", None):
+            try:
+                self.layered_memory.forget_last_exchange(user_prompt)
+            except Exception as e:
+                logger.warning(f"⚠️ Rollback da memória em camadas falhou: {e}")
+
+        logger.info("↩️ Último turno removido para regeneração")
+        return user_prompt
 
     def _save_chat_history(self):
         """Salva a conversa atual no arquivo eve_chats.json"""
