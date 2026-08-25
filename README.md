@@ -1,8 +1,15 @@
 # EVE - Assistente Virtual Inteligente
 
+> **Status: projeto pessoal, em uso do autor.** Não é produto lançado nem
+> serviço hospedado — roda localmente, com suas próprias chaves.
+
 Assistente de IA pessoal com personalidade (inspirada na EVE de Stellar Blade),
 que roda com modelos locais (Ollama) e nuvem (Groq), com interface web moderna,
 GUI desktop, CLI e bot de Discord com voz.
+
+![Interface web da EVE](docs/capturas/interface-web.png)
+_Interface web (HTML/CSS/JS puro, sem CDN — funciona offline). O rodapé da barra
+lateral mostra o estado ao vivo das duas engines: Groq (nuvem) e Ollama (local)._
 
 ## Estrutura
 

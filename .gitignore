@@ -30,3 +30,7 @@ nul
 
 # Claude Code
 .claude/
+
+# Artefatos de ferramenta (nao versionar)
+.claude-flow/
+.claude/
